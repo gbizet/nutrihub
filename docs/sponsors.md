@@ -5,6 +5,6 @@ title: Sponsors
 
 # Sponsors
 
-Supported by Société Générale Engineering Platform.
+Community-backed nutrition and sport project.
 
-![SGEP Logo](../static/img/logo.svg)
+![Project Logo](../static/img/logo.svg)

@@ -3,8 +3,8 @@ id: welcome
 title: Welcome
 ---
 
-# Welcome to SGEP Copilot Hub
+# Welcome to Nutri Sport Hub
 
-**Empowering collaborative AI adoption at Société Générale.**
+**Documentation for nutrition and sport use cases.**
 
-_All contributions are via GitHub Pull Request. All internal links are marked as [INTERNAL SG]._  
+_All contributions are made through GitHub Pull Requests._

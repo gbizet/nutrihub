@@ -1,0 +1,145 @@
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: #16202d;
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+.appChrome {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(14px);
+  background: rgba(246, 249, 252, 0.78);
+  border-bottom: 1px solid rgba(188, 200, 212, 0.8);
+}
+
+.appChromeInner {
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: 0.55rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.appBrand {
+  text-decoration: none;
+  font-weight: 700;
+  color: #16202d;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.appChromeActions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.appSyncTarget,
+.appChromeLink,
+.appSyncMessage {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  border-radius: 999px;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.appSyncTarget {
+  background: #eef2f7;
+  border: 1px solid #d7e0e8;
+  color: #516173;
+}
+
+.appChromeLink {
+  text-decoration: none;
+  border: 1px solid #d7e0e8;
+  background: #fffdf9;
+  color: #16202d;
+}
+
+.appSyncButton {
+  border: 1px solid #1a2a3f;
+  background: #1a2a3f;
+  color: #f8fafc;
+  border-radius: 999px;
+  padding: 0.42rem 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.appSyncButton:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.appSyncMessage {
+  max-width: min(46vw, 460px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid #d7e0e8;
+  background: #fffdf9;
+  color: #516173;
+}
+
+.appSyncMessageOk {
+  background: #eaf9ee;
+  border-color: #94d3a2;
+  color: #21653a;
+}
+
+.appSyncMessageWarn {
+  background: #fff4e8;
+  border-color: #f2c48b;
+  color: #8a4a05;
+}
+
+.appSyncMessageError {
+  background: #fff0f0;
+  border-color: #efb4b4;
+  color: #8f2f2f;
+}
+
+@media (max-width: 720px) {
+  .appChromeInner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .appChromeActions {
+    justify-content: flex-start;
+  }
+
+  .appSyncMessage {
+    max-width: 100%;
+  }
+}

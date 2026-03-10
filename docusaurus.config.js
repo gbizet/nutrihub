@@ -4,8 +4,8 @@ const lightCodeTheme = themes.github;
 const darkCodeTheme = themes.dracula;
 
 module.exports = {
-  title: 'SGEP Copilot Hub',
-  tagline: 'Empowering collaborative AI adoption at Société Générale.',
+  title: 'Nutri Sport Hub',
+  tagline: 'Nutrition and sport tracking workspace.',
   url: 'https://guillaumebizet.github.io',
   baseUrl: '/test/',
   onBrokenLinks: 'warn',
@@ -15,7 +15,7 @@ module.exports = {
   projectName: 'test',
   i18n: {
     defaultLocale: 'en',
-    locales: ['en']
+    locales: ['en'],
   },
   presets: [
     [
@@ -23,7 +23,7 @@ module.exports = {
       ({
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          routeBasePath: '/', // <-- clé !
+          routeBasePath: 'docs',
         },
         blog: false,
         theme: {
@@ -34,20 +34,19 @@ module.exports = {
   ],
   themeConfig: {
     navbar: {
-      title: 'SGEP Copilot Hub',
+      title: 'Nutri Sport Hub',
       logo: {
-        alt: 'SGEP Copilot Logo',
+        alt: 'Nutri Sport Hub Logo',
         src: 'img/logo.svg',
       },
       items: [
-        {to: '/why', label: 'Why?', position: 'left'},
-        {to: '/resources', label: 'Resources', position: 'left'},
-        {to: '/prompts', label: 'Prompts', position: 'left'},
-        {to: '/bugs', label: 'Bugs', position: 'left'},
-        {to: '/fallout-rpg', label: 'Fallout RPG', position: 'left'},
-        {to: '/how-to-contribute', label: 'Contribute', position: 'right'},
-        {to: '/who', label: "Who's Who", position: 'right'},
-        {to: '/sponsors', label: 'Sponsors', position: 'right'},
+        { to: '/', label: 'Accueil', position: 'left' },
+        { to: '/metrics', label: 'Poids', position: 'left' },
+        { to: '/nutrition', label: 'Nutrition', position: 'left' },
+        { to: '/training', label: 'Entrainement', position: 'left' },
+        { to: '/prompt-builder', label: 'Export IA', position: 'left' },
+        { to: '/data-admin', label: 'Data', position: 'left' },
+        { to: '/docs', label: 'Docs', position: 'right' },
       ],
     },
     prism: {

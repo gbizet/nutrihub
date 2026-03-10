@@ -1,18 +1,42 @@
 {
-  "name": "sgep-copilot-hub",
+  "name": "nutri-sport-hub",
   "version": "1.0.0",
+  "type": "module",
   "private": true,
   "scripts": {
-    "start": "docusaurus start",
-    "build": "docusaurus build",
-    "deploy": "docusaurus deploy"
+    "dev": "concurrently -k -n APP,STATE \"vite --host 127.0.0.1 --port 3000 --strictPort\" \"node scripts/state-server.mjs\"",
+    "start": "npm run dev",
+    "start:app": "vite --host 127.0.0.1 --port 3000 --strictPort",
+    "start:state": "node scripts/state-server.mjs",
+    "build": "vite build",
+    "cap:sync": "npx cap sync android",
+    "android:sync": "npm run build && npm run cap:sync",
+    "android:open": "npx cap open android",
+    "apk:debug": "npm run android:sync && cd android && gradlew.bat assembleDebug",
+    "android:ui:dump": "node scripts/android-ui-dump.mjs",
+    "health:debug": "node scripts/print-health-debug.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "test": "npm run test:node && npm run test:ui",
+    "test:node": "node --test",
+    "test:ui": "vitest run"
   },
   "dependencies": {
-    "@docusaurus/core": "^3.3.2",
-    "@docusaurus/preset-classic": "^3.3.2",
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
     "clsx": "^2.0.0",
-    "prism-react-renderer": "^2.0.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.13.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "concurrently": "^9.0.1",
+    "jsdom": "^26.1.0",
+    "vite": "^7.3.1",
+    "vitest": "^3.2.4"
   }
 }

@@ -4,8 +4,8 @@ title: Welcome
 slug: /
 ---
 
-# Welcome to SGEP Copilot Hub
+# Welcome to Nutri Sport Hub
 
-Retrouve ici la documentation SGEP Copilot Hub, toutes les ressources, etc.
+This workspace is dedicated to nutrition and sport tracking resources.
 
-- Use the sidebar to navigate!
+- Use the sidebar to navigate.

@@ -8,6 +8,7 @@ yarn-debug.log
 .build/
 .docusaurus/
 build/
+dist/
 
 # OS junk
 .DS_Store
@@ -30,3 +31,11 @@ logs/
 
 # Ignore local generated files
 coverage/
+data/
+tmp/
+current_ui.xml
+hc_*.xml
+hctoolbox_*.xml
+android/local.properties
+android/.gradle/
+android/app/build/

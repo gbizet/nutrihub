@@ -1,44 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-.cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
+:root {
+  --ifm-color-primary: #ef4444;
+  --ifm-color-primary-dark: #dc2626;
+  --ifm-color-primary-darker: #b91c1c;
+  --ifm-color-primary-darkest: #991b1b;
+  --ifm-color-primary-light: #f87171;
+  --ifm-color-primary-lighter: #fca5a5;
+  --ifm-color-primary-lightest: #fee2e2;
+  --ifm-background-color: #f7f8f2;
+  --ifm-font-family-base: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --ifm-heading-font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --ifm-navbar-background-color: #fffc;
+  --ifm-navbar-shadow: 0 14px 28px -30px #111827;
+  --ifm-code-font-size: 95%;
 }
-.cards > div {
-  flex: 1 1 300px;
-  min-width: 260px;
-  background: #fff;
-  border-radius: 1rem;
-  box-shadow: 0 2px 8px #0002;
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+
+html,
+body {
+  background: #f7f8f2;
 }
-.cards .tags {
-  margin-top: 1rem;
-  display: flex;
-  gap: 0.5rem;
+
+.navbar {
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid #e2e8f0;
 }
-.cards .tag {
-  padding: 0.2em 0.8em;
-  border-radius: 999px;
-  background: #EEE;
-  font-size: 0.8em;
-  color: #333;
+
+.navbar__title {
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
-.cards .tag.internal { background: #f99; color: #B00; }
-.cards .actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-  margin-bottom: 0.5rem;
+
+.footer {
+  border-top: 1px solid #e2e8f0;
 }
-.cards .action {
-  background: #E60028;
-  color: #fff;
-  padding: 0.2em 0.8em;
-  border-radius: 0.5em;
-  font-size: 0.9em;
-  text-decoration: none;
+
+.theme-doc-sidebar-container {
+  border-right: 1px solid #e2e8f0;
+}
+
+a {
+  text-underline-offset: 0.2rem;
 }
