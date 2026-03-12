@@ -29,10 +29,13 @@ export const formatMetric = (value, unit, digits = 0) => `${Number(value || 0).t
 export const formatSignedKcal = (value) => `${Number(value || 0) >= 0 ? '+' : ''}${Number(value || 0).toFixed(0)} kcal`;
 export const formatDateShort = (date) => `${date.slice(8, 10)}/${date.slice(5, 7)}`;
 
-export const formatStepActivityMeta = (steps, source) => {
+export const formatStepActivityMeta = ({ steps = 0, source = 'aucun', mode = 'none' } = {}) => {
+  if (mode === 'steps-neat') {
+    return steps > 0 ? `NEAT hors seance | ${steps} pas` : 'NEAT hors seance | pas non renseignes';
+  }
+  if (mode === 'health-active-kcal') return 'calories actives sante';
+  if (mode === 'cardio-estimate' || source === 'cardio x poids') return 'cardio estime';
   if (steps > 0) return `${steps} pas | estimation auto`;
-  if (source === 'active kcal log') return 'depense active loggee';
-  if (source === 'cardio x poids') return 'cardio estime';
   return 'pas non renseignes';
 };
 
@@ -42,7 +45,7 @@ export const formatTrainingMeta = (sessions, durationMin, source) => {
   return 'aucune seance';
 };
 
-const emptyMacros = () => ({
+export const emptyMacros = () => ({
   kcal: 0,
   protein: 0,
   carbs: 0,
@@ -89,48 +92,54 @@ export const resolveMetricForDate = (metricsAsc, date, field) => {
   return 0;
 };
 
-export const estimateBaseCalories = ({ weightKg, bodyFatPercent, leanMassKgEstimate }) => {
+export const estimateBaseCalories = ({ weightKg, bodyFatPercent }) => {
   if (weightKg > 0 && bodyFatPercent > 0 && bodyFatPercent < 70) {
     const leanMassKg = Math.max(weightKg * (1 - bodyFatPercent / 100), 35);
     return {
       kcal: 370 + 21.6 * leanMassKg,
       confidence: 'bonne',
-      method: 'poids + BF',
-    };
-  }
-  if (leanMassKgEstimate > 0) {
-    return {
-      kcal: 370 + 21.6 * leanMassKgEstimate,
-      confidence: 'moyenne',
-      method: 'masse maigre estimee',
+      method: 'BMR repos',
+      formula: 'poids + BF',
     };
   }
   if (weightKg > 0) {
     return {
       kcal: weightKg * 22,
       confidence: 'faible',
-      method: 'poids x 22',
+      method: 'BMR repos',
+      formula: 'poids x 22',
     };
   }
   return {
     kcal: 0,
     confidence: 'faible',
-    method: 'aucune base',
+    method: 'BMR repos',
+    formula: 'aucune base',
   };
 };
 
-export const estimateActivityCalories = ({ neatRow, weightKg }) => {
+export const estimateActivityCalories = ({ neatRow, weightKg, hasLoggedTraining = false }) => {
   const steps = Number(neatRow?.steps || 0);
   const cardioMin = Number(neatRow?.cardioMin || 0);
   const activeKcal = isActionableHealthActivityRow(neatRow) ? Number(neatRow?.caloriesActive || 0) : 0;
   const stepsEstimate = steps > 0 && weightKg > 0 ? steps * weightKg * 0.0005 : 0;
+  if (hasLoggedTraining) {
+    return {
+      kcal: stepsEstimate,
+      steps,
+      cardioMin,
+      source: stepsEstimate > 0 ? 'pas x poids' : 'aucun',
+      mode: stepsEstimate > 0 ? 'steps-neat' : 'none',
+    };
+  }
   const cardioEstimate = activeKcal > 0 || cardioMin <= 0 || weightKg <= 0 ? 0 : cardioMin * weightKg * 0.035;
   const kcal = activeKcal > 0 ? activeKcal : Math.max(stepsEstimate, cardioEstimate);
   return {
     kcal,
     steps,
     cardioMin,
-    source: activeKcal > 0 ? 'active kcal log' : stepsEstimate > 0 ? 'pas x poids' : cardioEstimate > 0 ? 'cardio x poids' : 'aucun',
+    source: activeKcal > 0 ? 'calories actives sante' : stepsEstimate > 0 ? 'pas x poids' : cardioEstimate > 0 ? 'cardio x poids' : 'aucun',
+    mode: activeKcal > 0 ? 'health-active-kcal' : stepsEstimate > 0 ? 'steps-estimate' : cardioEstimate > 0 ? 'cardio-estimate' : 'none',
   };
 };
 

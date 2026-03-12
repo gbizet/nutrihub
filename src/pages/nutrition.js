@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import Link from '@docusaurus/Link';
-import Layout from '@theme/Layout';
+import { Link } from 'react-router-dom';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { computeMacrosForAmount, formatMacrosLine, toPositive, useDashboardState } from '../lib/dashboardStore';
-import { isoDaysWindow } from '../lib/charts';
+import { isoDaysWindow, toSeriesValue } from '../lib/charts';
 import { getSessionsForDate } from '../lib/domainModel';
 import { getHealthSnapshotForDate } from '../lib/healthState.js';
 import { useLocalPageUiState } from '../lib/localUiState.js';
@@ -16,6 +16,8 @@ import {
   METRICS,
   clampPercent,
   confidenceLabel,
+  emptyMacros,
+  energyToneKey,
   estimateActivityCalories,
   estimateBaseCalories,
   estimateTrainingCalories,
@@ -175,10 +177,9 @@ export default function NutritionPage() {
     const intake = resolveDayNutrition(rows, log);
     const weightKg = resolveMetricForDate(metricsAsc, date, 'weight');
     const bodyFatPercent = resolveMetricForDate(metricsAsc, date, 'bodyFat');
-    const leanMassKgEstimate = Number(state.keto?.leanMassKgEstimate || 0);
-    const base = estimateBaseCalories({ weightKg, bodyFatPercent, leanMassKgEstimate });
+    const base = estimateBaseCalories({ weightKg, bodyFatPercent });
     const sessions = getSessionsForDate(state, date);
-    const activity = estimateActivityCalories({ neatRow, weightKg });
+    const activity = estimateActivityCalories({ neatRow, weightKg, hasLoggedTraining: sessions.length > 0 });
     const training = estimateTrainingCalories({ sessions, weightKg });
     const expenditureKcal = base.kcal + activity.kcal + training.kcal;
     const balanceKcal = intake.kcal - expenditureKcal;
@@ -194,8 +195,10 @@ export default function NutritionPage() {
       bodyFatPercent,
       baseKcal: base.kcal,
       baseMethod: base.method,
+      baseFormula: base.formula,
       activityKcal: activity.kcal,
       activitySource: activity.source,
+      activityMode: activity.mode,
       steps: activity.steps,
       cardioMin: activity.cardioMin,
       trainingKcal: training.kcal,
@@ -236,21 +239,21 @@ export default function NutritionPage() {
         label: 'Apport',
         color: '#0f172a',
         axis: 'left',
-        data: trendSnapshots.map((row) => ({ date: row.date, value: row.intakeKcal || 0 })),
+        data: trendSnapshots.map((row) => ({ date: row.date, value: row.intakeSource === 'none' ? null : toSeriesValue(row.intakeKcal) })),
       },
       {
         id: 'expenditure',
         label: 'Depense estimee',
         color: '#2563eb',
         axis: 'left',
-        data: trendSnapshots.map((row) => ({ date: row.date, value: row.expenditureKcal || 0 })),
+        data: trendSnapshots.map((row) => ({ date: row.date, value: toSeriesValue(row.expenditureKcal) })),
       },
       {
         id: 'balance',
         label: 'Solde',
         color: '#ea580c',
         axis: 'right',
-        data: trendSnapshots.map((row) => ({ date: row.date, value: row.balanceKcal || 0 })),
+        data: trendSnapshots.map((row) => ({ date: row.date, value: row.intakeSource === 'none' ? null : toSeriesValue(row.balanceKcal) })),
       },
     ]),
     [trendSnapshots],
@@ -263,21 +266,21 @@ export default function NutritionPage() {
         label: 'Proteines',
         color: '#f97316',
         axis: 'left',
-        data: trendSnapshots.map((row) => ({ date: row.date, value: row.proteinG || 0 })),
+        data: trendSnapshots.map((row) => ({ date: row.date, value: row.intakeSource === 'none' ? null : toSeriesValue(row.proteinG) })),
       },
       {
         id: 'carbs',
         label: 'Glucides',
         color: '#16a34a',
         axis: 'right',
-        data: trendSnapshots.map((row) => ({ date: row.date, value: row.carbsG || 0 })),
+        data: trendSnapshots.map((row) => ({ date: row.date, value: row.intakeSource === 'none' ? null : toSeriesValue(row.carbsG) })),
       },
       {
         id: 'fat',
         label: 'Lipides',
         color: '#7c3aed',
         axis: 'left',
-        data: trendSnapshots.map((row) => ({ date: row.date, value: row.fatG || 0 })),
+        data: trendSnapshots.map((row) => ({ date: row.date, value: row.intakeSource === 'none' ? null : toSeriesValue(row.fatG) })),
       },
     ]),
     [trendSnapshots],
@@ -379,6 +382,19 @@ export default function NutritionPage() {
   );
 
   const thresholdSummaryLabel = `Seuils ${thresholdSummary.ok} OK / ${thresholdSummary.bas} bas / ${thresholdSummary.haut} haut`;
+  const heroMacroGaugeItems = useMemo(
+    () => metricProgress.map((metric) => {
+      const goal = Number(state.goals?.[metric.key] ?? 0);
+      const goalLabel = goal > 0
+        ? `obj ${formatMetric(goal, metric.unit, 0)}`
+        : `cible ${metric.min}-${metric.max} ${metric.unit}`;
+      return {
+        ...metric,
+        goalLabel,
+      };
+    }),
+    [metricProgress, state.goals],
+  );
 
   const dailyInsightItems = useMemo(() => {
     const items = [];
@@ -606,7 +622,9 @@ export default function NutritionPage() {
       label: 'Tendances',
       defaultSpan: 12,
       render: () => (
-        <section className={styles.grid2}>
+        <details open className={`${styles.card} ${styles.detailsCard}`}>
+          <summary className={styles.cardSummary}>Tendances nutrition</summary>
+          <div className={styles.grid2}>
           <article className={styles.card}>
             <div className={styles.sectionHead}>
               <div>
@@ -666,7 +684,8 @@ export default function NutritionPage() {
               Actuel: P {round(selectedNutrition.protein, 1)} g | G {round(selectedNutrition.carbs, 1)} g | L {round(selectedNutrition.fat, 1)} g | source {selectedNutrition.source === 'entries' ? 'repas logges' : selectedNutrition.source === 'daily-log' ? 'journal importe' : 'aucune'}.
             </p>
           </article>
-        </section>
+          </div>
+        </details>
       ),
     },
     {
@@ -798,7 +817,7 @@ export default function NutritionPage() {
                 <h1>Journal nutrition</h1>
                 <p>Saisie repas d abord, lecture metabolique ensuite. Les jauges restent le repere central.</p>
               </div>
-              <CoreWorkflowNav active="nutrition" showSupport={false} />
+              <CoreWorkflowNav active="nutrition" supportMode="hub" />
             </div>
 
             <div className={styles.heroControlGrid}>
@@ -829,9 +848,57 @@ export default function NutritionPage() {
 
               <div className={styles.heroQuickActions}>
                 <span className={styles.pill}>{thresholdSummaryLabel}</span>
-                <Link className={`${styles.pill} ${styles.pillMuted}`} to="/metrics">Saisie poids</Link>
-                <Link className={`${styles.pill} ${styles.pillMuted}`} to="/training">Saisie train</Link>
+                <Link className={styles.compactActionLink} to="/metrics">Saisie poids</Link>
+                <Link className={styles.compactActionLink} to="/training">Saisie train</Link>
               </div>
+            </div>
+
+            <div className={styles.summaryStrip}>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Repas logges</div>
+                <div className={styles.summaryMetricValue}>
+                  {MEALS.filter((meal) => (entriesByMeal[meal.value] || []).length > 0).length}
+                </div>
+                <div className={styles.summaryMetricMeta}>sur {MEALS.length} repas</div>
+              </div>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Apport</div>
+                <div className={styles.summaryMetricValue}>{Math.round(selectedNutrition.kcal)} kcal</div>
+                <div className={styles.summaryMetricMeta}>{formatMacrosLine(selectedNutrition)}</div>
+              </div>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Depense</div>
+                <div className={styles.summaryMetricValue}>{Math.round(selectedEnergy.expenditureKcal)} kcal</div>
+                <div className={styles.summaryMetricMeta}>{selectedEnergy.confidence}</div>
+              </div>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Solde</div>
+                <div className={styles.summaryMetricValue}>{formatSignedKcal(selectedEnergy.balanceKcal)}</div>
+                <div className={styles.summaryMetricMeta}>{thresholdSummaryLabel}</div>
+              </div>
+            </div>
+
+            <div className={`${styles.macroGaugeGrid} ${styles.nutritionMacroGaugeGrid}`}>
+              {heroMacroGaugeItems.map((metric) => (
+                <button
+                  key={metric.key}
+                  type="button"
+                  className={styles.macroGaugeCard}
+                  onClick={() => openThresholdEditor(metric.key)}
+                >
+                  <div className={styles.macroGaugeTop}>
+                    <span className={styles.macroGaugeLabel}>{metric.label}</span>
+                    <strong className={styles.macroGaugeValue}>{formatMetric(metric.value, metric.unit, 0)}</strong>
+                  </div>
+                  <div className={styles.macroGaugeMeta}>{metric.goalLabel}</div>
+                  <div className={styles.macroGaugeTrack}>
+                    <div
+                      className={`${styles.macroGaugeFill} ${styles[`heroFill${metric.stateKey}`]}`}
+                      style={{ width: `${metric.fillPercent}%` }}
+                    />
+                  </div>
+                </button>
+              ))}
             </div>
 
             <div className={styles.heroTargetGrid}>
@@ -862,15 +929,22 @@ export default function NutritionPage() {
 
             <div className={styles.energyStrip}>
               <article className={styles.energyCard}>
-                <span className={styles.energyLabel}>Base estimee</span>
+                <span className={styles.energyLabel}>Metabolisme de repos</span>
                 <strong className={styles.energyValue}>{Math.round(selectedEnergy.baseKcal)} kcal</strong>
-                <span className={styles.energyMeta}>{selectedEnergy.baseMethod}</span>
+                <span className={styles.energyMeta}>
+                  {(selectedEnergy.baseMethod || '').startsWith('BMR') ? 'BMR' : selectedEnergy.baseMethod}
+                  {selectedEnergy.baseFormula ? ` | ${selectedEnergy.baseFormula}` : ''}
+                </span>
               </article>
               <article className={styles.energyCard}>
                 <span className={styles.energyLabel}>Activite</span>
                 <strong className={styles.energyValue}>{Math.round(selectedEnergy.activityKcal)} kcal</strong>
                 <span className={styles.energyMeta}>
-                  {formatStepActivityMeta(selectedEnergy.steps, selectedEnergy.activitySource)}
+                  {formatStepActivityMeta({
+                    steps: selectedEnergy.steps,
+                    source: selectedEnergy.activitySource,
+                    mode: selectedEnergy.activityMode,
+                  })}
                 </span>
               </article>
               <article className={styles.energyCard}>
@@ -883,7 +957,7 @@ export default function NutritionPage() {
               <article className={styles.energyCard}>
                 <span className={styles.energyLabel}>Depense totale</span>
                 <strong className={styles.energyValue}>{Math.round(selectedEnergy.expenditureKcal)} kcal</strong>
-                <span className={styles.energyMeta}>{selectedEnergy.confidence} | base + pas + sport</span>
+                <span className={styles.energyMeta}>{selectedEnergy.confidence} | repos + activite + sport</span>
               </article>
               <article className={`${styles.energyCard} ${styles.energyBalanceCard} ${styles[energyToneKey(selectedEnergy.balanceKcal)]}`}>
                 <span className={styles.energyLabel}>Solde</span>

@@ -57,15 +57,32 @@ export const countLoggedMealsForWindow = (entries) => {
 
 export const getSessionSetDetails = (session) => {
   if (Array.isArray(session?.setDetails) && session.setDetails.length > 0) {
-    return session.setDetails.map((row, index) => ({
-      setIndex: Number(row?.setIndex || index + 1),
-      reps: Number(row?.reps || 0),
-      loadDisplayed: Number(row?.loadDisplayed || row?.loadEstimated || 0),
-      loadEstimated:
-        row?.loadEstimated === null || row?.loadEstimated === undefined
-          ? null
-          : Number(row?.loadEstimated || 0),
-    }));
+    return session.setDetails
+      .map((row, index) => ({
+        setIndex: Number(row?.setIndex || index + 1),
+        reps: Number(row?.reps || 0),
+        loadDisplayed: Number(row?.loadDisplayed || row?.loadEstimated || 0),
+        loadEstimated:
+          row?.loadEstimated === null || row?.loadEstimated === undefined
+            ? null
+            : Number(row?.loadEstimated || 0),
+        loggedAt: `${row?.loggedAt || ''}`.trim(),
+        elapsedSinceWorkoutStartSec:
+          row?.elapsedSinceWorkoutStartSec === null || row?.elapsedSinceWorkoutStartSec === undefined || `${row?.elapsedSinceWorkoutStartSec ?? ''}`.trim() === ''
+            ? null
+            : Number(row?.elapsedSinceWorkoutStartSec || 0),
+        restSincePreviousSetSec:
+          row?.restSincePreviousSetSec === null || row?.restSincePreviousSetSec === undefined || `${row?.restSincePreviousSetSec ?? ''}`.trim() === ''
+            ? null
+            : Number(row?.restSincePreviousSetSec || 0),
+        timeLabel: `${row?.timeLabel || ''}`.trim(),
+        setNote: `${row?.setNote || ''}`.trim(),
+      }))
+      .sort((a, b) => Number(a.setIndex || 0) - Number(b.setIndex || 0))
+      .map((row, index) => ({
+        ...row,
+        setIndex: index + 1,
+      }));
   }
   const sets = Math.max(1, Number(session?.sets || 0));
   const reps = Number(session?.reps || 0);
@@ -75,7 +92,82 @@ export const getSessionSetDetails = (session) => {
     reps,
     loadDisplayed: load,
     loadEstimated: null,
+    loggedAt: '',
+    elapsedSinceWorkoutStartSec: null,
+    restSincePreviousSetSec: null,
+    timeLabel: '',
+    setNote: '',
   }));
+};
+
+const parseTimestampMs = (value) => {
+  const raw = `${value || ''}`.trim();
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getTime();
+};
+
+const toIsoTimestamp = (valueMs) => (
+  Number.isFinite(valueMs) ? new Date(valueMs).toISOString() : null
+);
+
+export const summarizeWorkoutTiming = (sessionsOrWorkout) => {
+  const sessions = Array.isArray(sessionsOrWorkout)
+    ? sessionsOrWorkout
+    : (Array.isArray(sessionsOrWorkout?.exercises) ? sessionsOrWorkout.exercises : []);
+
+  const fallbackDurationSec = sessions.reduce((max, session) => {
+    const durationMin = Number(session?.durationMin || session?.session_duration_min || 0);
+    if (!Number.isFinite(durationMin) || durationMin <= 0) return max;
+    return Math.max(max, Math.round(durationMin * 60));
+  }, 0);
+
+  const summary = sessions.reduce((acc, session) => {
+    getSessionSetDetails(session).forEach((setRow) => {
+      const loggedAtMs = parseTimestampMs(setRow.loggedAt);
+      if (loggedAtMs === null) return;
+
+      acc.firstLoggedAtMs = acc.firstLoggedAtMs === null
+        ? loggedAtMs
+        : Math.min(acc.firstLoggedAtMs, loggedAtMs);
+      acc.lastLoggedAtMs = acc.lastLoggedAtMs === null
+        ? loggedAtMs
+        : Math.max(acc.lastLoggedAtMs, loggedAtMs);
+
+      const elapsedSec = Number(setRow.elapsedSinceWorkoutStartSec);
+      if (Number.isFinite(elapsedSec) && elapsedSec >= 0) {
+        const startedAtMs = loggedAtMs - (Math.round(elapsedSec) * 1000);
+        acc.startedAtCandidates.push(startedAtMs);
+      }
+    });
+    return acc;
+  }, {
+    firstLoggedAtMs: null,
+    lastLoggedAtMs: null,
+    startedAtCandidates: [],
+  });
+
+  const exactStartedAtMs = summary.startedAtCandidates.length
+    ? Math.min(...summary.startedAtCandidates)
+    : null;
+  const startedAtMs = exactStartedAtMs ?? summary.firstLoggedAtMs;
+  const endedAtMs = summary.lastLoggedAtMs;
+
+  let durationSec = startedAtMs !== null && endedAtMs !== null
+    ? Math.max(0, Math.round((endedAtMs - startedAtMs) / 1000))
+    : null;
+  if ((durationSec === null || durationSec <= 0) && fallbackDurationSec > 0) {
+    durationSec = fallbackDurationSec;
+  }
+
+  return {
+    startedAt: toIsoTimestamp(startedAtMs),
+    endedAt: toIsoTimestamp(endedAtMs),
+    durationSec,
+    hasSetTimings: endedAtMs !== null,
+    hasExactStart: exactStartedAtMs !== null,
+  };
 };
 
 export const getWorkoutKeyForSession = (session) =>
@@ -102,12 +194,23 @@ export const groupSessionsIntoWorkouts = (sessions = []) => {
     const workout = map.get(workoutId);
     workout.date = workout.date || date;
     workout.durationMin = Math.max(Number(workout.durationMin || 0), Number(session?.durationMin || session?.session_duration_min || 0));
-    workout.exercises.push(session);
+    workout.exercises.push({
+      session,
+      sortIndex: index,
+    });
   });
 
   return Array.from(map.values())
     .map((workout) => {
-      const exercises = workout.exercises.slice().sort((a, b) => `${a?.exerciseName || ''}`.localeCompare(`${b?.exerciseName || ''}`));
+      const exercises = workout.exercises
+        .slice()
+        .sort((a, b) => {
+          const aOrder = Number.isFinite(Number(a?.session?.exerciseOrder)) ? Number(a.session.exerciseOrder) : Number.MAX_SAFE_INTEGER;
+          const bOrder = Number.isFinite(Number(b?.session?.exerciseOrder)) ? Number(b.session.exerciseOrder) : Number.MAX_SAFE_INTEGER;
+          if (aOrder !== bOrder) return aOrder - bOrder;
+          return Number(a?.sortIndex || 0) - Number(b?.sortIndex || 0);
+        })
+        .map((entry) => entry.session);
       const totals = exercises.reduce((acc, session) => {
         const setDetails = getSessionSetDetails(session);
         const reps = setDetails.reduce((sum, row) => sum + Number(row.reps || 0), 0);
@@ -131,6 +234,7 @@ export const groupSessionsIntoWorkouts = (sessions = []) => {
         totalSets: totals.sets,
         totalReps: totals.reps,
         totalVolume: totals.volume,
+        ...summarizeWorkoutTiming(exercises),
       };
     })
     .sort((a, b) => `${b.date || ''}`.localeCompare(`${a.date || ''}`) || Number(a.sortIndex || 0) - Number(b.sortIndex || 0));
@@ -148,7 +252,6 @@ const cycleLogToSessionLike = (row) => ({
   sets: toNum(row.sets),
   reps: toNum(row.reps),
   load: toNum(row.load),
-  rir: null,
   notes: row.cycleName || '',
   source: 'cycle-log',
   done: Boolean(row.done),

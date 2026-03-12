@@ -49,7 +49,7 @@ export default function DateNav({ value, onChange }) {
   return (
     <div className={styles.dateNav}>
       <input
-        className={styles.input}
+        className={`${styles.input} ${styles.dateNavInput}`}
         type={useTextFallback ? 'text' : 'date'}
         inputMode={useTextFallback ? 'numeric' : undefined}
         pattern={useTextFallback ? '\\d{4}-\\d{2}-\\d{2}' : undefined}
@@ -59,9 +59,11 @@ export default function DateNav({ value, onChange }) {
         onChange={handleInput}
         onBlur={useTextFallback ? handleBlur : undefined}
       />
-      <button className={styles.tinyButton} type="button" onClick={() => shiftDays(-1)}>-1j</button>
-      <button className={styles.tinyButton} type="button" onClick={setToday}>Auj.</button>
-      <button className={styles.tinyButton} type="button" onClick={() => shiftDays(1)}>+1j</button>
+      <div className={styles.dateNavActions} role="group" aria-label="Navigation date">
+        <button className={styles.dateNavAction} type="button" onClick={() => shiftDays(-1)}>-1j</button>
+        <button className={`${styles.dateNavAction} ${styles.dateNavActionToday}`} type="button" onClick={setToday}>Auj.</button>
+        <button className={styles.dateNavAction} type="button" onClick={() => shiftDays(1)}>+1j</button>
+      </div>
     </div>
   );
 }

@@ -1112,8 +1112,10 @@ class HealthBridgePlugin : Plugin() {
 
         if (grantedPermissionIds.contains(SAMSUNG_PERMISSION_HEART_RATE_READ)) {
             val heartRateField = getStaticField(SAMSUNG_HEART_RATE_TYPE_CLASS_NAME, "HEART_RATE")
+            val minHeartRateField = getStaticField(SAMSUNG_HEART_RATE_TYPE_CLASS_NAME, "MIN_HEART_RATE")
             val seriesDataField = getStaticField(SAMSUNG_HEART_RATE_TYPE_CLASS_NAME, "SERIES_DATA")
             val valuesByDate = linkedMapOf<String, MutableList<Double>>()
+            val minByDate = linkedMapOf<String, Double>()
             try {
                 readSamsungDataPoints("HEART_RATE", startDate, endDate, limit = 256)
                     .forEach { point ->
@@ -1135,6 +1137,11 @@ class HealthBridgePlugin : Plugin() {
                         row.put("capturedAt", readSamsungPointCapturedAt(point))
                         row.put("sourceRecordId", readSamsungPointId(point))
                         row.put("sourcePackage", readSamsungPointSourcePackage(point))
+                        // Track per-day minimum for resting HR approximation
+                        val minVal = readSamsungNumericValue(point, minHeartRateField) ?: value
+                        if (minVal > 0.0) {
+                            minByDate[date] = minOf(minByDate[date] ?: Double.MAX_VALUE, minVal)
+                        }
                     }
                 valuesByDate.forEach { (date, values) ->
                     val avg = values.average()
@@ -1142,6 +1149,11 @@ class HealthBridgePlugin : Plugin() {
                         rowsByDate.getOrPut(date) {
                             baseRow(date, endOfDayInstant(date).toString(), "", provider = "samsung-health")
                         }.put("heartRateAvg", avg)
+                    }
+                }
+                minByDate.forEach { (date, minHr) ->
+                    if (minHr > 0.0 && minHr < Double.MAX_VALUE) {
+                        rowsByDate[date]?.put("restingHeartRate", minHr)
                     }
                 }
             } catch (error: Throwable) {
@@ -1211,7 +1223,8 @@ class HealthBridgePlugin : Plugin() {
             }
         }
 
-        Log.i(TAG, "samsung vitals fallback detail: days=${rowsByDate.size}")
+        val restingCount = rowsByDate.values.count { it.has("restingHeartRate") }
+        Log.i(TAG, "samsung vitals fallback detail: days=${rowsByDate.size} restingDays=$restingCount")
         return toJsonArray(rowsByDate.values)
     }
 

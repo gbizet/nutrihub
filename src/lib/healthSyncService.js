@@ -119,8 +119,8 @@ export const classifyHealthImportFailure = (error) => {
   const message = cleanText(error?.message || error);
   const lower = message.toLowerCase();
   if (!message) return HEALTH_ERROR_CATEGORY.unknown;
-  if (lower.includes('permission')) return HEALTH_ERROR_CATEGORY.permissions;
-  if (lower.includes('runtime') || lower.includes('sdk') || lower.includes('policy')) return HEALTH_ERROR_CATEGORY.runtime;
-  if (lower.includes('sync') || lower.includes('drive')) return HEALTH_ERROR_CATEGORY.sync;
+  if (/\bpermission\b/.test(lower)) return HEALTH_ERROR_CATEGORY.permissions;
+  if (/\b(runtime|sdk|policy)\b/.test(lower)) return HEALTH_ERROR_CATEGORY.runtime;
+  if (/\b(sync|drive)\b/.test(lower)) return HEALTH_ERROR_CATEGORY.sync;
   return HEALTH_ERROR_CATEGORY.import;
 };

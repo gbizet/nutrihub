@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import Layout from '@theme/Layout';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { formatMacrosLine, toNumber, useDashboardState } from '../lib/dashboardStore';
-import { pointDelta } from '../lib/charts';
+import { pointDelta, toSeriesValue } from '../lib/charts';
 import chatgptDatasetS1S2 from '../lib/chatgptDatasetS1S2';
 import LayoutBlocks from '../components/LayoutBlocks';
 import DateNav from '../components/DateNav';
-import { ketoSignalsForDay } from '../lib/coachEngine';
+import { nutritionSignalsForDay } from '../lib/coachEngine';
 import { countLoggedMeals, getSessionsForDate, getWorkoutsForDate } from '../lib/domainModel';
 import { getHealthSnapshotForDate, getHealthSnapshotsForDates } from '../lib/healthState.js';
 import InteractiveLineChart from '../components/InteractiveLineChart';
@@ -88,10 +88,14 @@ export default function SummaryPage() {
         meals: countLoggedMeals(dayEntries),
         workouts: dayWorkouts.length,
         exerciseBlocks: daySessions.length,
-        weight: dayMetrics?.weight ?? '-',
-        bf: dayMetrics?.bodyFat ?? '-',
-        kcal: macros.kcal || toNumber(dayLog?.caloriesEstimated),
-        fatigue: toNumber(dayLog?.fatigueNervousSystem),
+        weight: dayMetrics?.weight ?? null,
+        bf: dayMetrics?.bodyFat ?? null,
+        kcal: dayEntries.length > 0
+          ? macros.kcal
+          : (dayLog?.caloriesEstimated !== null && dayLog?.caloriesEstimated !== undefined && `${dayLog.caloriesEstimated}`.trim() !== ''
+            ? toNumber(dayLog?.caloriesEstimated)
+            : null),
+        fatigue: dayLog?.fatigueNervousSystem ?? null,
         sleep: health.sleepHours,
         steps: health.steps,
         restingBpm: health.restingBpm,
@@ -122,13 +126,13 @@ export default function SummaryPage() {
     fat: { min: 45, max: 90 },
   };
 
-  const kcalSeries = useMemo(() => weeklyRows.map((row) => ({ date: row.date, value: row.kcal || 0 })), [weeklyRows]);
+  const kcalSeries = useMemo(() => weeklyRows.map((row) => ({ date: row.date, value: toSeriesValue(row.kcal) })), [weeklyRows]);
   const fatigueSeries = useMemo(
-    () => weeklyRows.map((row) => ({ date: row.date, value: row.fatigue || 0 })),
+    () => weeklyRows.map((row) => ({ date: row.date, value: toSeriesValue(row.fatigue) })),
     [weeklyRows],
   );
   const weightSeries = useMemo(
-    () => weeklyRows.map((row) => ({ date: row.date, value: Number(row.weight) || 0 })),
+    () => weeklyRows.map((row) => ({ date: row.date, value: toSeriesValue(row.weight, { zeroIsMissing: true }) })),
     [weeklyRows],
   );
   const healthWindow = useMemo(
@@ -136,11 +140,11 @@ export default function SummaryPage() {
     [state, weeklyRows],
   );
   const sleepSeries = useMemo(
-    () => healthWindow.map((row) => ({ date: row.date, value: row.sleepHours || 0 })),
+    () => healthWindow.map((row) => ({ date: row.date, value: toSeriesValue(row.sleepHours, { zeroIsMissing: true }) })),
     [healthWindow],
   );
   const stepsSeries = useMemo(
-    () => healthWindow.map((row) => ({ date: row.date, value: row.steps || 0 })),
+    () => healthWindow.map((row) => ({ date: row.date, value: toSeriesValue(row.steps, { zeroIsMissing: true }) })),
     [healthWindow],
   );
   const restingBpmSeries = useMemo(
@@ -188,20 +192,20 @@ export default function SummaryPage() {
         text: `Risque recup (fatigue>=7 + kcal bas) sur ${comboDays.length} j: ${comboDays.map((row) => row.date).join(', ')}`,
       });
     }
-    const ketoDays = weeklyRows.map((row) => ({ date: row.date, keto: ketoSignalsForDay(state, row.date) }));
-    const lowCarbOffDays = ketoDays.filter((row) => !row.keto.isNetCarbOk);
-    const proteinLowDays = ketoDays.filter((row) => !row.keto.isProteinOk);
-    const hydrationLowDays = ketoDays.filter((row) => !row.keto.isHydrationOk);
-    if (lowCarbOffDays.length) {
+    const nutritionDays = weeklyRows.map((row) => ({ date: row.date, signals: nutritionSignalsForDay(state, row.date) }));
+    const highCarbDays = nutritionDays.filter((row) => !row.signals.isCarbsOk);
+    const proteinLowDays = nutritionDays.filter((row) => !row.signals.isProteinOk);
+    const hydrationLowDays = nutritionDays.filter((row) => !row.signals.isHydrationOk);
+    if (highCarbDays.length) {
       output.push({
         severity: 'warn',
-        text: `Ceto hors cible (${lowCarbOffDays.length} j): ${lowCarbOffDays.map((row) => row.date).join(', ')}`,
+        text: `Glucides au-dessus du plafond (${highCarbDays.length} j): ${highCarbDays.map((row) => row.date).join(', ')}`,
       });
     }
     if (proteinLowDays.length) {
       output.push({
         severity: 'warn',
-        text: `Proteines sous cible ceto (${proteinLowDays.length} j): ${proteinLowDays.map((row) => row.date).join(', ')}`,
+        text: `Proteines sous cible (${proteinLowDays.length} j): ${proteinLowDays.map((row) => row.date).join(', ')}`,
       });
     }
     if (hydrationLowDays.length) {
@@ -321,7 +325,9 @@ export default function SummaryPage() {
       label: 'Courbes',
       defaultSpan: 12,
       render: () => (
-        <section className={styles.grid2}>
+        <details className={`${styles.card} ${styles.detailsCard}`}>
+          <summary className={styles.cardSummary}>Courbes nutrition et poids</summary>
+          <div className={styles.grid2}>
           <article className={styles.card}>
             <div className={styles.sectionHead}>
               <h2>Courbe kcal + fatigue</h2>
@@ -359,7 +365,8 @@ export default function SummaryPage() {
             />
             <p className={styles.smallMuted}>Delta poids 7j: {pointDelta(weightSeries).toFixed(1)} kg</p>
           </article>
-        </section>
+          </div>
+        </details>
       ),
     },
     {
@@ -367,7 +374,9 @@ export default function SummaryPage() {
       label: 'Sante',
       defaultSpan: 12,
       render: () => (
-        <section className={styles.grid2}>
+        <details className={`${styles.card} ${styles.detailsCard}`}>
+          <summary className={styles.cardSummary}>Tendances sante</summary>
+          <div className={styles.grid2}>
           <article className={styles.card}>
             <h2>Sommeil</h2>
             <InteractiveLineChart
@@ -443,7 +452,8 @@ export default function SummaryPage() {
               onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
             />
           </article>
-        </section>
+          </div>
+        </details>
       ),
     },
     {
@@ -474,7 +484,8 @@ export default function SummaryPage() {
       label: 'Import GPT',
       defaultSpan: 12,
       render: () => (
-        <section className={styles.card}>
+        <details className={`${styles.card} ${styles.detailsCard}`}>
+          <summary className={styles.cardSummary}>Import dataset ChatGPT</summary>
           <h2>Import dataset ChatGPT</h2>
           <p className={styles.smallMuted}>Colle le texte brut (avec JSON par jour) puis importe. Les imports precedents ChatGPT sont remplaces.</p>
           <textarea className={styles.textarea} value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="Colle ici le bloc ChatGPT..." />
@@ -483,7 +494,7 @@ export default function SummaryPage() {
             <button className={styles.buttonGhost} type="button" onClick={loadPresetS1S2}>Charger S1+S2 pre-rempli</button>
           </div>
           {importStatus && <p className={styles.smallMuted}>{importStatus}</p>}
-        </section>
+        </details>
       ),
     },
     {
@@ -491,7 +502,8 @@ export default function SummaryPage() {
       label: 'Vue 7j',
       defaultSpan: 12,
       render: () => (
-        <section className={styles.card}>
+        <details className={`${styles.card} ${styles.detailsCard}`}>
+          <summary className={styles.cardSummary}>Vue {windowDays} jours</summary>
           <h2>Vue {windowDays} jours</h2>
           <table className={styles.table}>
             <thead>
@@ -501,12 +513,12 @@ export default function SummaryPage() {
               {weeklyRows.map((row) => (
                 <tr key={row.date}>
                   <td>{row.date}</td>
-                  <td>{row.kcal.toFixed(0)}</td>
+                  <td>{row.kcal === null ? '-' : row.kcal.toFixed(0)}</td>
                   <td>{row.meals}</td>
                   <td>{row.workouts}</td>
                   <td>{row.exerciseBlocks}</td>
-                  <td>{row.weight}</td>
-                  <td>{row.bf}</td>
+                  <td>{row.weight ?? '-'}</td>
+                  <td>{row.bf ?? '-'}</td>
                   <td>{row.sleep ? row.sleep.toFixed(1) : '-'}</td>
                   <td>{row.steps || '-'}</td>
                   <td>{row.restingBpm || '-'}</td>
@@ -518,7 +530,7 @@ export default function SummaryPage() {
           <p className={styles.smallMuted}>
             Total periode: {weeklyTotals.kcal.toFixed(0)} kcal | {weeklyTotals.meals} repas | {weeklyTotals.sessions} workouts
           </p>
-        </section>
+        </details>
       ),
     },
     {
@@ -526,7 +538,8 @@ export default function SummaryPage() {
       label: 'Historique',
       defaultSpan: 12,
       render: () => (
-        <section className={styles.card}>
+        <details className={`${styles.card} ${styles.detailsCard}`}>
+          <summary className={styles.cardSummary}>Historique dataset GPT</summary>
           <h2>Historique dataset GPT ({importedHistory.length} jours)</h2>
           <table className={styles.table}>
             <thead>
@@ -553,18 +566,18 @@ export default function SummaryPage() {
               ))}
             </tbody>
           </table>
-        </section>
+        </details>
       ),
     },
   ];
 
   return (
-    <Layout title="Resume" description="Vue quotidienne et hebdomadaire">
+    <Layout title="Audit" description="Vue secondaire de controle et d audit">
       <main className={styles.page}>
         <div className={styles.container}>
           <section className={styles.hero}>
-            <h1>Resume global</h1>
-            <p>Vue secondaire de controle. Le parcours principal reste Poids, Nutrition, Training et Export AI.</p>
+            <h1>Audit</h1>
+            <p>Vue secondaire de controle. Le parcours principal reste Accueil, Poids, Nutrition et Training.</p>
             <div className={styles.metaRow}>
               <label>
                 <span className={styles.smallMuted}>Date de reference</span>
@@ -579,7 +592,7 @@ export default function SummaryPage() {
               <span className={`${styles.pill} ${styles.pillMuted}`}>Tension: {selectedHealth.bloodPressure || '-'}</span>
               <span className={`${styles.pill} ${styles.pillMuted}`}>O2: {selectedHealth.oxygenSaturationPercent ? `${selectedHealth.oxygenSaturationPercent.toFixed(1)}%` : '-'}</span>
             </div>
-            <CoreWorkflowNav active="summary" showSupport />
+            <CoreWorkflowNav active="summary" supportMode="full" />
           </section>
 
           <LayoutBlocks pageId="summary" state={state} setState={setState} blocks={blocks} />

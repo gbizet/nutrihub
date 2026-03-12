@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  DASHBOARD_STORAGE_WARNING_EVENT,
   DASHBOARD_STATE_EVENT,
   emitDashboardStateEvent,
   persistDashboardState,
@@ -15,16 +16,27 @@ import {
   getGoogleDriveConfig,
   getRequiredGoogleDriveScopes,
   getStoredGoogleDriveToken,
+  hasActiveCompanionDriveSession,
   isNativeMobileRuntime,
+  getLastSuccessfulDrivePushUpdatedAt,
   markDriveSyncCheckpoint,
   tokenHasScopes,
 } from '../lib/googleDriveSync';
 import { pullDriveStateToLocal, pushLocalStateToDrive } from '../lib/driveSyncService.js';
 import { getHealthIntegrationStatus, importAutoHealthWindow } from '../lib/healthSyncService.js';
+import { hasOngoingWorkoutDraft } from '../lib/ongoingWorkout.js';
 import { appendSyncDebugLog } from '../lib/syncDebug';
+import { createStateServerSnapshot } from '../lib/stateRecovery.js';
 
 const AUTO_PUSH_DEBOUNCE_MS = 10_000;
 const AUTO_HEALTH_RUNTIME_KEY = 'nutri-health-auto-runtime-v1';
+let bootAutoHealthLaunchAttempted = false;
+let bootAutoHealthImportTs = 0;
+
+export const __resetGlobalSyncBarBootStateForTests = () => {
+  bootAutoHealthLaunchAttempted = false;
+  bootAutoHealthImportTs = 0;
+};
 
 const parseJsonStorage = (key) => {
   if (typeof window === 'undefined') return {};
@@ -40,6 +52,12 @@ const saveJsonStorage = (key, payload) => {
   window.localStorage.setItem(key, JSON.stringify(payload || {}));
 };
 
+const resolveAutoHealthCooldownTimestamp = (runtime = {}, state = null, bootTs = 0) => {
+  const runtimeTs = Number(runtime?.lastAutoImportTs) || 0;
+  const stateTs = Date.parse(`${state?.healthSync?.lastAutoImportAt || ''}`) || 0;
+  return Math.max(runtimeTs, stateTs, Number(bootTs) || 0, 0);
+};
+
 const healthPayloadDates = (payload = {}) => {
   const records = payload.records || {};
   return [
@@ -52,14 +70,28 @@ const healthPayloadDates = (payload = {}) => {
     .filter(Boolean);
 };
 
-export default function GlobalSyncBar() {
+const toneClassName = (tone) => {
+  if (tone === 'ok') return 'Ok';
+  if (tone === 'warn') return 'Warn';
+  if (tone === 'error') return 'Error';
+  return 'Idle';
+};
+
+export default function GlobalSyncBar({
+  mobileChromeMode = 'default',
+  mobileTitleShort = 'Nutri Sport Hub',
+  routeKey = 'home',
+  syncCompact = false,
+}) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [tone, setTone] = useState('idle');
   const [sessionTick, setSessionTick] = useState(0);
+  const chromeRef = useRef(null);
   const busyRef = useRef(false);
   const pushTimerRef = useRef(null);
   const autoHealthBusyRef = useRef(false);
+  const launchFlowBusyRef = useRef(false);
   const ignoredDashboardUpdatedAtRef = useRef('');
 
   const refreshSession = () => setSessionTick((value) => value + 1);
@@ -74,7 +106,14 @@ export default function GlobalSyncBar() {
     () => getRequiredGoogleDriveScopes(prefs),
     [prefs.mode, prefs.mirrorAppData],
   );
-  const scopeReady = tokenHasScopes(storedToken, requiredScopes);
+  const scopeReady = storedToken?.companion || tokenHasScopes(storedToken, requiredScopes);
+  const syncReady = configured && scopeReady;
+  const compactStatusLabel = busy
+    ? 'Sync...'
+    : message || (syncReady ? 'Autosync on' : 'Autosync off');
+  const compactToneClass = toneClassName(
+    busy ? 'warn' : (message ? tone : (syncReady ? 'ok' : 'idle')),
+  );
 
   const setBusyState = (value) => {
     busyRef.current = value;
@@ -87,7 +126,7 @@ export default function GlobalSyncBar() {
     const currentTargetLabel = describeDriveSyncTarget(currentPrefs.mode, currentConfig);
     const currentToken = getStoredGoogleDriveToken();
     const currentScopes = getRequiredGoogleDriveScopes(currentPrefs);
-    const currentScopeReady = tokenHasScopes(currentToken, currentScopes);
+    const currentScopeReady = currentToken?.companion || tokenHasScopes(currentToken, currentScopes);
 
     if (!currentConfig.clientId) {
       if (mode === 'manual') {
@@ -116,6 +155,10 @@ export default function GlobalSyncBar() {
 
     setBusyState(true);
     try {
+      await createStateServerSnapshot(localState, {
+        reason: mode === 'manual' ? 'before-manual-sync-push' : 'before-auto-sync-push',
+        label: `${mode}:${localState.updatedAt || ''}`,
+      }).catch(() => null);
       const result = await pushLocalStateToDrive({
         state: localState,
         preferences: currentPrefs,
@@ -146,22 +189,64 @@ export default function GlobalSyncBar() {
     }
   };
 
-  const runAutoPull = async (reason = 'resume') => {
+  const runAutoPull = async (reason = 'resume', { force = false } = {}) => {
     const currentPrefs = getDriveSyncPreferences();
     const currentConfig = getGoogleDriveConfig();
     const currentToken = getStoredGoogleDriveToken();
     const currentScopes = getRequiredGoogleDriveScopes(currentPrefs);
-    if (!currentConfig.clientId || !currentToken?.accessToken || !tokenHasScopes(currentToken, currentScopes)) return false;
+    if (!currentConfig.clientId || !currentToken?.accessToken || !(currentToken?.companion || tokenHasScopes(currentToken, currentScopes))) {
+      appendSyncDebugLog('GlobalSyncBar', 'auto pull skipped', {
+        reason,
+        cause: !currentConfig.clientId ? 'no-client-id' : !currentToken?.accessToken ? 'no-token' : 'scope-mismatch',
+      });
+      return false;
+    }
 
     try {
+      if (hasOngoingWorkoutDraft()) {
+        appendSyncDebugLog('GlobalSyncBar', 'auto pull skipped', {
+          reason,
+          cause: 'ongoing-workout-active',
+        });
+        return false;
+      }
       const localState = readPersistedDashboardState();
-      if (!localState) return false;
+      if (!localState) {
+        appendSyncDebugLog('GlobalSyncBar', 'auto pull skipped', { reason, cause: 'no-local-state' });
+        return false;
+      }
+      await createStateServerSnapshot(localState, {
+        reason: 'before-auto-pull',
+        label: `${reason}:${localState.updatedAt || ''}`,
+      }).catch(() => null);
       const result = await pullDriveStateToLocal({
         localState,
         preferences: currentPrefs,
         source: reason,
       });
-      if (!result.envelope || result.comparison !== 'remote-newer' || !result.mergedState) return false;
+      if (!result.envelope || result.comparison !== 'remote-newer' || !result.mergedState) {
+        appendSyncDebugLog('GlobalSyncBar', 'auto pull skipped', {
+          reason,
+          cause: !result.envelope ? 'no-remote-envelope' : 'local-up-to-date',
+          comparison: result.comparison || 'unknown',
+        });
+        return false;
+      }
+
+      // Guard: don't overwrite local edits that haven't been pushed yet
+      if (!force) {
+        const lastCheckpoint = getLastSuccessfulDrivePushUpdatedAt(currentPrefs);
+        if (lastCheckpoint && localState.updatedAt && localState.updatedAt > lastCheckpoint) {
+          appendSyncDebugLog('GlobalSyncBar', 'auto pull skipped', {
+            reason,
+            cause: 'local-has-unpushed-edits',
+            localUpdatedAt: localState.updatedAt,
+            lastCheckpoint,
+            remoteUpdatedAt: result.updatedAt || null,
+          });
+          return false;
+        }
+      }
       const merged = result.mergedState;
 
       ignoredDashboardUpdatedAtRef.current = `${merged.updatedAt || ''}`;
@@ -190,26 +275,64 @@ export default function GlobalSyncBar() {
   };
 
   const runAutoHealthImport = async (reason = 'launch') => {
-    if (!mobileNative || autoHealthBusyRef.current) return false;
+    const launchAttempt = reason === 'launch';
+    if (launchAttempt && bootAutoHealthLaunchAttempted) {
+      appendSyncDebugLog('GlobalSyncBar', 'auto health import skipped', {
+        reason,
+        cause: 'launch-already-attempted',
+      });
+      return false;
+    }
+    if (!mobileNative || autoHealthBusyRef.current) {
+      appendSyncDebugLog('GlobalSyncBar', 'auto health import skipped', {
+        reason,
+        cause: !mobileNative ? 'not-mobile-native' : 'already-busy',
+      });
+      return false;
+    }
+    if (launchAttempt) bootAutoHealthLaunchAttempted = true;
     autoHealthBusyRef.current = true;
     try {
       const currentState = readPersistedDashboardState();
-      if (!currentState) return false;
+      if (!currentState) {
+        appendSyncDebugLog('GlobalSyncBar', 'auto health import skipped', { reason, cause: 'no-local-state' });
+        return false;
+      }
       const status = await getHealthIntegrationStatus();
-      if (!status.healthConnectAvailable || (status.missingPermissions || []).length > 0) return false;
+      const healthConnectReady = status.healthConnectAvailable && (status.missingPermissions || []).length === 0;
+      const samsungFallbackReady = status.samsungDataSdkFallbackAvailable;
+      if (!healthConnectReady && !samsungFallbackReady) {
+        appendSyncDebugLog('GlobalSyncBar', 'auto health import skipped', {
+          reason,
+          cause: 'no-source-ready',
+          healthConnectAvailable: status.healthConnectAvailable,
+          missingPermissions: (status.missingPermissions || []).length,
+          samsungFallbackReady,
+        });
+        return false;
+      }
 
       const today = todayIso();
       const runtime = parseJsonStorage(AUTO_HEALTH_RUNTIME_KEY);
-      const hasImportedBefore = Boolean(currentState.healthSync?.lastImportAt);
-      const lastImportSummary = `${currentState.healthSync?.lastImportSummary || ''}`.toLowerCase();
-      const lastImportWasEmpty = !lastImportSummary || lastImportSummary.includes('aucune donnee importee');
-      if (hasImportedBefore && runtime.lastAutoImportDate === today && !lastImportWasEmpty) return false;
+      const AUTO_HEALTH_COOLDOWN_MS = 15 * 60 * 1000;
+      const lastAutoTs = resolveAutoHealthCooldownTimestamp(runtime, currentState, bootAutoHealthImportTs);
+      const bypassCooldownForLaunch = launchAttempt;
+      if (!bypassCooldownForLaunch && lastAutoTs && Date.now() - lastAutoTs < AUTO_HEALTH_COOLDOWN_MS) {
+        appendSyncDebugLog('GlobalSyncBar', 'auto health import skipped', {
+          reason,
+          cause: 'cooldown-active',
+          lastAutoImportTs: new Date(lastAutoTs).toISOString(),
+          cooldownMin: 15,
+        });
+        return false;
+      }
 
       const payload = await importAutoHealthWindow(currentState.healthSync, {
         overlapDays: 2,
         bootstrapDays: 30,
         endDate: today,
       });
+      bootAutoHealthImportTs = Date.now();
       const importedDates = [...new Set(healthPayloadDates(payload))];
       const lastImportedDate = [...importedDates].sort().at(-1) || currentState.selectedDate || today;
       const merged = mergeHealthImportIntoState(currentState, payload);
@@ -224,12 +347,11 @@ export default function GlobalSyncBar() {
         selectedDate: nextState.selectedDate,
         source: 'auto-health',
       });
-      if (importedDates.length > 0) {
-        saveJsonStorage(AUTO_HEALTH_RUNTIME_KEY, {
-          lastAutoImportDate: today,
-          lastReason: reason,
-        });
-      }
+      saveJsonStorage(AUTO_HEALTH_RUNTIME_KEY, {
+        lastAutoImportTs: Date.parse(`${nextState.healthSync?.lastAutoImportAt || nextState.healthSync?.lastImportAt || ''}`) || bootAutoHealthImportTs || Date.now(),
+        lastAutoImportDate: today,
+        lastReason: reason,
+      });
       appendSyncDebugLog('GlobalSyncBar', 'auto health import success', {
         reason,
         startDate: payload.startDate,
@@ -242,6 +364,12 @@ export default function GlobalSyncBar() {
         setMessage(`Sante auto OK: ${importedDates.length} jour(s) maj.`);
       }
       refreshSession();
+
+      // Chain auto-push to Drive after successful health import
+      if (importedDates.length > 0) {
+        runSyncAttempt('auto');
+      }
+
       return true;
     } catch (error) {
       appendSyncDebugLog('GlobalSyncBar', 'auto health import failed', { reason, error });
@@ -255,6 +383,30 @@ export default function GlobalSyncBar() {
     if (busyRef.current) return;
     await runSyncAttempt('manual');
   };
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const root = document.documentElement;
+    const updateChromeHeight = () => {
+      const nextHeight = Math.ceil(chromeRef.current?.getBoundingClientRect()?.height || 0);
+      root.style.setProperty('--app-chrome-height', `${nextHeight || 60}px`);
+    };
+
+    updateChromeHeight();
+
+    if (typeof ResizeObserver === 'function' && chromeRef.current) {
+      const observer = new ResizeObserver(() => updateChromeHeight());
+      observer.observe(chromeRef.current);
+      return () => {
+        observer.disconnect();
+      };
+    }
+
+    window.addEventListener('resize', updateChromeHeight);
+    return () => {
+      window.removeEventListener('resize', updateChromeHeight);
+    };
+  }, []);
 
   useEffect(() => {
     const handleDriveSyncEvent = (event) => {
@@ -284,10 +436,32 @@ export default function GlobalSyncBar() {
       }, AUTO_PUSH_DEBOUNCE_MS);
     };
 
+    const handleStorageWarning = (event) => {
+      const detail = event?.detail || {};
+      if (!detail.message) return;
+      setTone('warn');
+      setMessage(detail.message);
+    };
+
+    const runMobileRefreshFlow = async (reason = 'resume') => {
+      if (!mobileNative) {
+        runAutoPull(reason);
+        runAutoHealthImport(reason);
+        return;
+      }
+      if (reason === 'launch' && launchFlowBusyRef.current) return;
+      if (reason === 'launch') launchFlowBusyRef.current = true;
+      try {
+        await runAutoPull(reason, { force: true });
+        await runAutoHealthImport(reason);
+      } finally {
+        if (reason === 'launch') launchFlowBusyRef.current = false;
+      }
+    };
+
     const handleResume = () => {
       refreshSession();
-      runAutoPull('resume');
-      runAutoHealthImport('resume');
+      runMobileRefreshFlow('resume');
     };
 
     const handleVisibilityChange = () => {
@@ -296,38 +470,63 @@ export default function GlobalSyncBar() {
 
     window.addEventListener(DRIVE_SYNC_EVENT, handleDriveSyncEvent);
     window.addEventListener(DASHBOARD_STATE_EVENT, handleDashboardState);
+    window.addEventListener(DASHBOARD_STORAGE_WARNING_EVENT, handleStorageWarning);
     window.addEventListener('focus', handleResume);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    runAutoPull('launch');
-    runAutoHealthImport('launch');
+    runMobileRefreshFlow('launch');
 
     return () => {
       clearTimeout(pushTimerRef.current);
       window.removeEventListener(DRIVE_SYNC_EVENT, handleDriveSyncEvent);
       window.removeEventListener(DASHBOARD_STATE_EVENT, handleDashboardState);
+      window.removeEventListener(DASHBOARD_STORAGE_WARNING_EVENT, handleStorageWarning);
       window.removeEventListener('focus', handleResume);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [mobileNative, targetLabel]);
 
   return (
-    <header className="appChrome">
+    <header
+      ref={chromeRef}
+      className={`appChrome ${syncCompact ? 'appChromeCompact' : ''} ${mobileChromeMode === 'capture' ? 'appChromeCapture' : ''}`}
+      data-app-chrome="true"
+      data-route={routeKey}
+    >
       <div className="appChromeInner">
-        <Link className="appBrand" to="/">Nutri Sport Hub</Link>
+        <div className="appChromeLead">
+          <Link className="appBrand" to="/">Nutri Sport Hub</Link>
+          <span className="appRouteTitle">{mobileTitleShort}</span>
+        </div>
         <div className="appChromeActions">
-          <span className="appSyncTarget" title={targetLabel}>{prefs.mode === 'visible' ? 'Drive visible' : 'Cache app'}</span>
-          <span className="appSyncTarget" title={configured ? 'Autosync 10s actif apres changement local.' : 'Configure Drive dans Sync.'}>
-            {configured && scopeReady ? 'Autosync on' : 'Autosync off'}
-          </span>
-          <button className="appSyncButton" type="button" disabled={busy} onClick={handleSyncNow}>
-            {busy ? 'Sync...' : 'Sync maintenant'}
-          </button>
-          <Link className="appChromeLink" to="/integrations">Sync</Link>
-          {message ? (
-            <span className={`appSyncMessage appSyncMessage${tone.charAt(0).toUpperCase()}${tone.slice(1)}`} title={message}>
-              {message}
+          <div className="appChromeActionsDetailed">
+            <span className="appSyncTarget" title={targetLabel}>{prefs.mode === 'visible' ? 'Drive visible' : 'Cache app'}</span>
+            <span className="appSyncTarget" title={configured ? 'Autosync 10s actif apres changement local.' : 'Configure Drive dans Sync.'}>
+              {syncReady ? 'Autosync on' : 'Autosync off'}
             </span>
+            <button className="appSyncButton" type="button" disabled={busy} onClick={handleSyncNow}>
+              {busy ? 'Sync...' : 'Sync maintenant'}
+            </button>
+            <Link className="appChromeLink" to="/integrations">Sync</Link>
+            {message ? (
+              <span className={`appSyncMessage appSyncMessage${toneClassName(tone)}`} title={message}>
+                {message}
+              </span>
+            ) : null}
+          </div>
+          {syncCompact ? (
+            <div className="appChromeActionsCompact">
+              <span
+                className={`appChromeStatusPill appChromeStatusPill${compactToneClass}`}
+                title={message || targetLabel}
+              >
+                {compactStatusLabel}
+              </span>
+              <button className="appChromeCompactAction" type="button" disabled={busy} onClick={handleSyncNow}>
+                {busy ? 'Sync...' : 'Sync'}
+              </button>
+              <Link className="appChromeActionLink" to="/integrations">Regler</Link>
+            </div>
           ) : null}
         </div>
       </div>

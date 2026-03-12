@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Link from '@docusaurus/Link';
-import Layout from '@theme/Layout';
+import { Link } from 'react-router-dom';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { toBounded, toPositive, useDashboardState } from '../lib/dashboardStore';
 import { getHealthSnapshotForDate } from '../lib/healthState.js';
@@ -338,8 +338,9 @@ export default function MetricsPage() {
       defaultSpan: 12,
       render: () => (
         <section className={styles.grid2}>
-          <article className={styles.card}>
-            <h2>Saisie complete</h2>
+          <details className={`${styles.card} ${styles.detailsCard}`}>
+            <summary className={styles.cardSummary}>Saisie complete</summary>
+            <p className={styles.smallMuted}>Bloc secondaire pour ajuster composition, sommeil et notes sans ralentir la saisie rapide.</p>
             <form className={styles.formGrid} onSubmit={saveMetrics}>
               <input className={styles.input} type="date" value={form.date} onInput={(e) => setForm((p) => ({ ...p, date: e.target.value }))} onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))} />
               <input className={styles.input} type="number" step="0.1" placeholder="Poids kg" value={form.weight} onChange={(e) => setForm((p) => ({ ...p, weight: e.target.value }))} />
@@ -353,10 +354,10 @@ export default function MetricsPage() {
               <input className={styles.input} placeholder="Notes" value={form.notes} onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))} />
               <button className={styles.button} type="submit">Enregistrer mesures</button>
             </form>
-          </article>
+          </details>
 
-          <article className={styles.card}>
-            <h2>Historique recent</h2>
+          <details className={`${styles.card} ${styles.detailsCard}`}>
+            <summary className={styles.cardSummary}>Historique recent</summary>
             <table className={styles.table}>
               <thead>
                 <tr>
@@ -385,7 +386,7 @@ export default function MetricsPage() {
                 )}
               </tbody>
             </table>
-          </article>
+          </details>
         </section>
       ),
     },
@@ -396,15 +397,44 @@ export default function MetricsPage() {
       <main className={styles.page}>
         <div className={styles.container}>
           <section className={styles.hero}>
-            <h1>Poids et composition</h1>
-            <p>Hub central: saisie rapide du poids, suivi visuel, historique actionnable.</p>
-            <div className={styles.metaRow}>
-              <span className={styles.pill}>Date active: {state.selectedDate}</span>
-              <span className={styles.pill}>Dernier poids: {latestWeight ? `${latestWeight.toFixed(1)} kg` : '-'}</span>
-              <span className={styles.pill}>Delta total: {formatDelta(deltaTotal, ' kg')}</span>
-              <span className={styles.pill}>Delta 7j: {formatDelta(delta7d, ' kg')}</span>
+            <div className={styles.heroHeaderRow}>
+              <div className={styles.heroTitleWrap}>
+                <span className={styles.heroEyebrow}>Suivi corporel quotidien</span>
+                <h1>Poids et composition</h1>
+                <p>Lecture rapide d abord, saisie et historique ensuite. Le hero mobile ne garde que les signaux utiles.</p>
+              </div>
+              <div className={styles.heroControlCard}>
+                <span className={styles.smallMuted}>Date active</span>
+                <DateNav
+                  value={state.selectedDate}
+                  onChange={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
+                />
+                <span className={styles.smallMuted}>Source {metricHealthSource?.provider || 'manuel'}</span>
+              </div>
             </div>
-            <CoreWorkflowNav active="metrics" showSupport />
+            <div className={styles.summaryStrip}>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Poids</div>
+                <div className={styles.summaryMetricValue}>{latestWeight ? `${latestWeight.toFixed(1)} kg` : '-'}</div>
+                <div className={styles.summaryMetricMeta}>{state.selectedDate}</div>
+              </div>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Delta total</div>
+                <div className={styles.summaryMetricValue}>{formatDelta(deltaTotal, ' kg')}</div>
+                <div className={styles.summaryMetricMeta}>depuis le premier point</div>
+              </div>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Delta 7j</div>
+                <div className={styles.summaryMetricValue}>{formatDelta(delta7d, ' kg')}</div>
+                <div className={styles.summaryMetricMeta}>tendance courte</div>
+              </div>
+              <div className={styles.summaryMetric}>
+                <div className={styles.summaryMetricLabel}>Source</div>
+                <div className={styles.summaryMetricValue}>{metricHealthSource?.provider || 'manuel'}</div>
+                <div className={styles.summaryMetricMeta}>saisie / import sante</div>
+              </div>
+            </div>
+            <CoreWorkflowNav active="metrics" supportMode="hub" />
           </section>
 
           <LayoutBlocks pageId="metrics" state={state} setState={setState} blocks={blocks} />

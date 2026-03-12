@@ -38,20 +38,85 @@ export const MUSCLE_GROUP_LABELS = {
   other: 'Autres',
 };
 
+export const EQUIPMENT_OPTIONS = [
+  'Rack + barre olympique + disques',
+  'Rack + barre droite + disques',
+  'Rack + EZ Bar + disques',
+  'Rack + Hex Bar + disques',
+  'Banc + barre olympique + disques',
+  "Banc + paire d'halteres",
+  'Haltere',
+  "Paire d'halteres",
+  'Barre olympique',
+  'Barre droite',
+  'Hex Bar',
+  'EZ Bar',
+  'Landmine',
+  'Poulie simple',
+  'Poulie double',
+  'Poulies vis-a-vis',
+  'Machine guidee',
+  'Poids du corps',
+  'Full Rack',
+];
+
 export const COMMON_EXERCISES = [
-  { name: 'Bench Press', equipment: 'Full Rack', category: 'Push' },
-  { name: 'Incline Bench Press', equipment: 'Full Rack', category: 'Push' },
+  { name: 'Bench Press', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Developpe couche', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Dev couche', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Developpe couche barre', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Developpe couche prise serree', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Incline Bench Press', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Developpe incline', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Dev incline', equipment: 'Banc + barre olympique + disques', category: 'Push' },
+  { name: 'Developpe incline halteres', equipment: "Banc + paire d'halteres", category: 'Push' },
+  { name: 'Developpe couche halteres', equipment: "Banc + paire d'halteres", category: 'Push' },
   { name: 'Overhead Press', equipment: 'Barre olympique', category: 'Shoulders' },
-  { name: 'Back Squat', equipment: 'Full Rack', category: 'Lower Body' },
+  { name: 'Developpe militaire', equipment: 'Barre olympique', category: 'Shoulders' },
+  { name: 'Landmine Press', equipment: 'Landmine', category: 'Shoulders' },
+  { name: 'Back Squat', equipment: 'Rack + barre olympique + disques', category: 'Lower Body' },
+  { name: 'Front Squat', equipment: 'Rack + barre olympique + disques', category: 'Lower Body' },
+  { name: 'Pause Squat', equipment: 'Rack + barre olympique + disques', category: 'Lower Body' },
   { name: 'Romanian Deadlift', equipment: 'Barre olympique', category: 'Posterior Chain' },
+  { name: 'Souleve de terre', equipment: 'Barre olympique', category: 'Posterior Chain' },
   { name: 'Hex Bar Deadlift', equipment: 'Hex Bar', category: 'Lower Body' },
+  { name: 'Barbell Row', equipment: 'Barre olympique', category: 'Back' },
+  { name: 'Pendlay Row', equipment: 'Barre olympique', category: 'Back' },
+  { name: 'One Arm Dumbbell Row', equipment: 'Haltere', category: 'Back' },
+  { name: 'Rowing haltere un bras', equipment: 'Haltere', category: 'Back' },
+  { name: 'Tirage row banc haltere mono bras', equipment: 'Banc + paire d\'halteres', category: 'Back' },
+  { name: 'Chest Supported Row', equipment: "Paire d'halteres", category: 'Back' },
   { name: 'EZ Bar Curl', equipment: 'EZ Bar', category: 'Arms' },
+  { name: 'Curl barre EZ', equipment: 'EZ Bar', category: 'Arms' },
+  { name: 'Hammer Curl', equipment: 'Haltere', category: 'Arms' },
+  { name: 'Dumbbell Bench Press', equipment: "Paire d'halteres", category: 'Push' },
+  { name: 'Incline Dumbbell Press', equipment: "Paire d'halteres", category: 'Push' },
+  { name: 'Lateral Raise', equipment: "Paire d'halteres", category: 'Shoulders' },
+  { name: 'Elevation laterale', equipment: "Paire d'halteres", category: 'Shoulders' },
+  { name: 'Elevations laterales', equipment: "Paire d'halteres", category: 'Shoulders' },
+  { name: 'Elevation laterale halteres', equipment: "Paire d'halteres", category: 'Shoulders' },
   { name: 'Triceps Extension (Poulie)', equipment: 'Poulies vis-a-vis', category: 'Arms' },
+  { name: 'Triceps Poulie', equipment: 'Poulie double', category: 'Arms' },
+  { name: 'Extension triceps a la poulie haute', equipment: 'Poulie double', category: 'Arms' },
   { name: 'Cable Fly', equipment: 'Poulies vis-a-vis', category: 'Chest' },
   { name: 'Cable Row', equipment: 'Poulies vis-a-vis', category: 'Back' },
+  { name: 'Seated Cable Row', equipment: 'Poulie double', category: 'Back' },
   { name: 'Lat Pulldown (Poulie)', equipment: 'Poulies vis-a-vis', category: 'Back' },
+  { name: 'Vertical Pulldown', equipment: 'Poulie double', category: 'Back' },
+  { name: 'Tirage vertical', equipment: 'Poulie double', category: 'Back' },
+  { name: 'Tirage vertical poulie double', equipment: 'Poulie double', category: 'Back' },
   { name: 'Face Pull', equipment: 'Poulies vis-a-vis', category: 'Shoulders' },
   { name: 'Lateral Raise (Poulie)', equipment: 'Poulies vis-a-vis', category: 'Shoulders' },
+  { name: 'Oiseau halteres', equipment: "Paire d'halteres", category: 'Shoulders' },
+  { name: 'Shrug halteres', equipment: "Paire d'halteres", category: 'Back' },
+  { name: 'Cable Cross Over', equipment: 'Poulies vis-a-vis', category: 'Chest' },
+  { name: 'Goblet Squat', equipment: 'Haltere', category: 'Lower Body' },
+  { name: 'Bulgarian Split Squat', equipment: "Paire d'halteres", category: 'Lower Body' },
+  { name: 'Pull Up', equipment: 'Poids du corps', category: 'Back' },
+  { name: 'Traction pdc', equipment: 'Poids du corps', category: 'Back' },
+  { name: 'Dip', equipment: 'Poids du corps', category: 'Push' },
+  { name: 'Farmer Walk', equipment: "Paire d'halteres", category: 'Upper Body' },
+  { name: 'Marche du fermier', equipment: "Paire d'halteres", category: 'Upper Body' },
 ];
 
 export const isMeaningfulExerciseName = (name) => {
@@ -66,6 +131,12 @@ export const isMeaningfulExerciseName = (name) => {
 };
 
 export const normalizeExerciseMappingKey = (name = '') => normalize(name);
+
+export const findCommonExerciseByName = (exerciseName = '') => {
+  const key = normalizeExerciseMappingKey(exerciseName);
+  if (!key) return null;
+  return COMMON_EXERCISES.find((exercise) => normalizeExerciseMappingKey(exercise.name) === key) || null;
+};
 
 export const normalizeMuscleGroupShares = (candidate = {}) => {
   const positiveEntries = EXERCISE_MUSCLE_GROUPS

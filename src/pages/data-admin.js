@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import Layout from '@theme/Layout';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { useDashboardState } from '../lib/dashboardStore';
 import CoreWorkflowNav from '../components/CoreWorkflowNav';
@@ -210,9 +210,9 @@ export default function DataAdminPage() {
       <main className={styles.page}>
         <div className={styles.container}>
           <section className={styles.hero}>
-            <h1>Data admin</h1>
-            <p>Support technique: snapshots, patchs, export/import complet de l etat.</p>
-            <CoreWorkflowNav active="data-admin" showSupport />
+            <h1>Admin technique</h1>
+            <p>Surface technique reservee au support: snapshots, patchs, imports JSON et restauration de l etat.</p>
+            <CoreWorkflowNav active="data-admin" supportMode="full" />
           </section>
           <section className={styles.grid2}>
             <article className={styles.card}>

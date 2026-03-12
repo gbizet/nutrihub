@@ -9,9 +9,8 @@ import FoodsPage from '../pages/foods';
 import NeatPage from '../pages/neat';
 import DataAdminPage from '../pages/data-admin';
 import SummaryPage from '../pages/summary';
-import DashboardsPage from '../pages/dashboards';
 import IntegrationsPage from '../pages/integrations';
-import FitnessCoachPage from '../pages/fitness-coach';
+import SupportPage from '../pages/support';
 
 const LEGACY_REDIRECTS = [
   { from: '/docs', to: '/' },
@@ -25,13 +24,14 @@ export default function App() {
       <Route path="/nutrition" element={<NutritionPage />} />
       <Route path="/training" element={<TrainingPage />} />
       <Route path="/prompt-builder" element={<PromptBuilderPage />} />
+      <Route path="/support" element={<SupportPage />} />
       <Route path="/foods" element={<FoodsPage />} />
       <Route path="/neat" element={<NeatPage />} />
       <Route path="/data-admin" element={<DataAdminPage />} />
       <Route path="/summary" element={<SummaryPage />} />
-      <Route path="/dashboards" element={<DashboardsPage />} />
+      <Route path="/dashboards" element={<Navigate to="/support" replace />} />
       <Route path="/integrations" element={<IntegrationsPage />} />
-      <Route path="/fitness-coach" element={<FitnessCoachPage />} />
+      <Route path="/fitness-coach" element={<Navigate to="/support" replace />} />
       {LEGACY_REDIRECTS.map((item) => (
         <Route key={item.from} path={item.from} element={<Navigate to={item.to} replace />} />
       ))}

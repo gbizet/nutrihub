@@ -1,4 +1,5 @@
-import { nativeDriveAuthorize, nativeDriveDisconnect } from './nativeDriveAuth';
+import { nativeDriveAuthorize, nativeDriveDisconnect } from './nativeDriveAuth.js';
+import { fetchJson, fetchWithTimeout } from './network.js';
 import { appendSyncDebugLog } from './syncDebug.js';
 
 const DRIVE_SCOPES = {
@@ -11,10 +12,14 @@ const DEVICE_ID_KEY = 'nutri-sync-device-id';
 const TOKEN_KEY = 'nutri-google-drive-token';
 const PREFS_KEY = 'nutri-google-drive-sync-prefs';
 const SYNC_RUNTIME_KEY = 'nutri-google-drive-sync-runtime';
+const COMPANION_SESSION_KEY = 'nutri-companion-drive-session';
 export const DRIVE_SYNC_EVENT = 'nutri-drive-sync';
 const GIS_SCRIPT_ID = 'google-identity-services';
 const GIS_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 const DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
+const DRIVE_LIST_PAGE_SIZE = 25;
+const DRIVE_LIST_MAX_PAGES = 4;
+const COMPANION_HEALTH_CACHE_TTL_MS = 30_000;
 export const DRIVE_SYNC_MODES = {
   appData: 'appData',
   visible: 'visible',
@@ -27,6 +32,133 @@ export const isNativeMobileRuntime = () => {
   if (typeof capacitor.isNativePlatform === 'function') return capacitor.isNativePlatform();
   if (typeof capacitor.getPlatform === 'function') return capacitor.getPlatform() !== 'web';
   return false;
+};
+
+// ---------------------------------------------------------------------------
+// Companion server session helpers (Phase 2)
+// ---------------------------------------------------------------------------
+
+export const resolveCompanionBaseUrl = (rawUrl, baseOrigin = '') => {
+  const trimmed = `${rawUrl || ''}`.trim();
+  if (!trimmed) return '';
+  try {
+    const fallbackOrigin = `${baseOrigin || (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1')}`.trim();
+    const parsed = new URL(trimmed, fallbackOrigin || undefined);
+    parsed.hash = '';
+    parsed.search = '';
+    parsed.pathname = parsed.pathname.replace(/\/api\/state\/?$/i, '').replace(/\/+$/, '');
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed.replace(/\/+$/, '').replace(/\/api\/state$/i, '');
+  }
+};
+
+export const getCompanionDriveBaseUrl = () => {
+  if (typeof window === 'undefined') return '';
+  return resolveCompanionBaseUrl(import.meta.env?.VITE_REMOTE_STATE_URL || '', window.location?.origin || '');
+};
+
+const isCompanionAvailable = () => Boolean(getCompanionDriveBaseUrl()) && !isNativeMobileRuntime();
+let companionHealthCache = {
+  baseUrl: '',
+  checkedAt: 0,
+  payload: null,
+};
+
+export const getCompanionServerHealth = async ({ force = false } = {}) => {
+  const base = getCompanionDriveBaseUrl();
+  if (!base || isNativeMobileRuntime()) return null;
+  const now = Date.now();
+  if (
+    !force
+    && companionHealthCache.payload
+    && companionHealthCache.baseUrl === base
+    && now - companionHealthCache.checkedAt < COMPANION_HEALTH_CACHE_TTL_MS
+  ) {
+    return companionHealthCache.payload;
+  }
+  try {
+    const payload = await fetchJson(`${base}/health`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    companionHealthCache = {
+      baseUrl: base,
+      checkedAt: now,
+      payload,
+    };
+    return payload;
+  } catch (error) {
+    appendSyncDebugLog('googleDriveSync', 'companion health fetch failed', { error });
+    companionHealthCache = {
+      baseUrl: base,
+      checkedAt: now,
+      payload: null,
+    };
+    return null;
+  }
+};
+
+const getCompanionSessionStorage = () => {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage;
+};
+
+const companionFetchJson = async (path, options = {}) => {
+  const base = getCompanionDriveBaseUrl();
+  if (!base) throw new Error('Companion server URL not configured.');
+  const response = await fetchWithTimeout(`${base}${path}`, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      ...options.headers,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    const error = new Error(`Companion ${options.method || 'GET'} ${path} failed: ${response.status} ${text}`);
+    error.status = response.status;
+    throw error;
+  }
+  if (response.status === 204) return null;
+  return response.json();
+};
+
+export const getCompanionDriveSession = async () => {
+  if (!isCompanionAvailable()) return null;
+  try {
+    const result = await companionFetchJson('/api/drive/session');
+    return result?.active ? result : null;
+  } catch {
+    return null;
+  }
+};
+
+const cachedCompanionSession = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = getCompanionSessionStorage()?.getItem(COMPANION_SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const cacheCompanionSession = (session) => {
+  if (typeof window === 'undefined') return;
+  const storage = getCompanionSessionStorage();
+  if (!storage) return;
+  if (session) {
+    storage.setItem(COMPANION_SESSION_KEY, JSON.stringify(session));
+  } else {
+    storage.removeItem(COMPANION_SESSION_KEY);
+  }
+};
+
+export const hasActiveCompanionDriveSession = () => {
+  if (!isCompanionAvailable()) return false;
+  return Boolean(cachedCompanionSession()?.active);
 };
 
 const driveApi = (path) => `https://www.googleapis.com/drive/v3${path}`;
@@ -135,6 +267,18 @@ export const markSuccessfulDrivePush = (updatedAt, preferences = {}, meta = {}) 
 
 export const getStoredGoogleDriveToken = () => {
   if (typeof window === 'undefined') return null;
+
+  // If companion session is cached, return a synthetic token object
+  if (isCompanionAvailable() && cachedCompanionSession()?.active) {
+    return {
+      accessToken: '__companion_session__',
+      scope: cachedCompanionSession()?.scope || '',
+      tokenType: 'Bearer',
+      expiresAt: Date.now() + 3600_000, // Validity managed server-side
+      companion: true,
+    };
+  }
+
   try {
     const localRaw = window.localStorage.getItem(TOKEN_KEY);
     const sessionRaw = window.sessionStorage.getItem(TOKEN_KEY);
@@ -145,8 +289,10 @@ export const getStoredGoogleDriveToken = () => {
     if (!localRaw && sessionRaw) {
       window.localStorage.setItem(TOKEN_KEY, sessionRaw);
     }
+    if (sessionRaw) window.sessionStorage.removeItem(TOKEN_KEY);
     return parsed;
-  } catch {
+  } catch (error) {
+    appendSyncDebugLog('googleDriveSync', 'stored token parse failed', { error });
     return null;
   }
 };
@@ -169,9 +315,9 @@ export const ensureDeviceId = () => {
 };
 
 export const getGoogleDriveConfig = () => ({
-  clientId: import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID || '',
-  fileName: import.meta.env.VITE_GOOGLE_DRIVE_FILE_NAME || DRIVE_FILE_NAME,
-  visibleFolderName: import.meta.env.VITE_GOOGLE_DRIVE_VISIBLE_FOLDER_NAME || DRIVE_VISIBLE_FOLDER_NAME,
+  clientId: import.meta.env?.VITE_GOOGLE_DRIVE_CLIENT_ID || '',
+  fileName: import.meta.env?.VITE_GOOGLE_DRIVE_FILE_NAME || DRIVE_FILE_NAME,
+  visibleFolderName: import.meta.env?.VITE_GOOGLE_DRIVE_VISIBLE_FOLDER_NAME || DRIVE_VISIBLE_FOLDER_NAME,
 });
 
 export const getRequiredGoogleDriveScopes = (preferences = getDriveSyncPreferences()) => {
@@ -192,7 +338,6 @@ const stripLocalOnlyState = (state) => {
   const next = { ...state };
   delete next.stateSnapshots;
   delete next.layouts;
-  delete next.dashboards;
   return next;
 };
 
@@ -294,6 +439,81 @@ export const requestGoogleDriveAccessToken = async ({ forceConsent = false, pref
     return token.accessToken;
   }
 
+  // ---------- Web: try companion code model first ----------
+  if (isCompanionAvailable()) {
+    const companionHealth = await getCompanionServerHealth();
+    if (!companionHealth?.driveConfigured) {
+      appendSyncDebugLog('googleDriveSync', 'companion drive flow skipped', {
+        reason: 'drive-proxy-not-configured',
+        companionHealth,
+      });
+    } else {
+    // Check if we already have a companion session
+      if (!forceConsent) {
+        const existing = await getCompanionDriveSession();
+        if (existing?.active) {
+          cacheCompanionSession(existing);
+          appendSyncDebugLog('googleDriveSync', 'reuse companion session', {
+            scope: existing.scope,
+            hasRefreshToken: existing.hasRefreshToken,
+          });
+          // Return a sentinel: the companion session handles auth via cookies
+          return '__companion_session__';
+        }
+      }
+
+      if (!window.google?.accounts?.oauth2) {
+        await ensureGoogleIdentityScript();
+      }
+
+      return new Promise((resolve, reject) => {
+        const codeClient = window.google.accounts.oauth2.initCodeClient({
+          client_id: config.clientId,
+          scope: requiredScopes.join(' '),
+          ux_mode: 'popup',
+          callback: async (response) => {
+            if (!response || response.error) {
+              reject(new Error(response?.error || 'Autorisation Google Drive refusee.'));
+              return;
+            }
+            try {
+              const result = await companionFetchJson('/api/drive/auth/code', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Requested-With': 'XmlHttpRequest',
+                },
+                body: JSON.stringify({ code: response.code }),
+              });
+              cacheCompanionSession({ active: true, scope: result.scope || '' });
+              // Clear any legacy browser token
+              clearStoredToken();
+              appendSyncDebugLog('googleDriveSync', 'companion code exchange success', {
+                scope: result.scope,
+              });
+              resolve('__companion_session__');
+            } catch (error) {
+              appendSyncDebugLog('googleDriveSync', 'companion code exchange failed', { error });
+              reject(new Error(error?.message || 'Echange de code companion impossible.'));
+            }
+          },
+          error_callback: (error) => {
+            appendSyncDebugLog('googleDriveSync', 'code client popup error', error);
+            reject(new Error(error?.type || 'Autorisation Google Drive interrompue.'));
+          },
+        });
+
+        appendSyncDebugLog('googleDriveSync', 'requestCode start (companion)', {
+          forceConsent,
+          storedHadScopes: storedHasScopes,
+          scopes: requiredScopes,
+        });
+        codeClient.requestCode();
+      });
+    }
+  }
+
+  // ---------- Web fallback: legacy token model (no companion) ----------
   if (!window.google?.accounts?.oauth2) {
     await ensureGoogleIdentityScript();
   }
@@ -322,7 +542,7 @@ export const requestGoogleDriveAccessToken = async ({ forceConsent = false, pref
       },
     });
 
-    appendSyncDebugLog('googleDriveSync', 'requestAccessToken start', {
+    appendSyncDebugLog('googleDriveSync', 'requestAccessToken start (legacy)', {
       forceConsent,
       storedHadScopes: storedHasScopes,
       scopes: requiredScopes,
@@ -342,6 +562,20 @@ export const revokeGoogleDriveAccess = async () => {
     clearStoredToken();
     return;
   }
+
+  // Companion session: revoke via backend
+  if (isCompanionAvailable() && hasActiveCompanionDriveSession()) {
+    try {
+      await companionFetchJson('/api/drive/session', { method: 'DELETE' });
+    } catch (error) {
+      appendSyncDebugLog('googleDriveSync', 'companion session delete failed', { error });
+    }
+    cacheCompanionSession(null);
+    clearStoredToken();
+    return;
+  }
+
+  // Legacy web token model
   await ensureGoogleIdentityScript();
   if (stored?.accessToken && window.google?.accounts?.oauth2?.revoke) {
     await new Promise((resolve) => {
@@ -353,22 +587,50 @@ export const revokeGoogleDriveAccess = async () => {
 
 const escapeDriveQueryValue = (value = '') => `${value}`.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-const authorizedJsonFetch = async (accessToken, url, options = {}) => {
-  const response = await fetch(url, {
+const isCompanionToken = (token) => token === '__companion_session__';
+
+const companionDriveJsonFetch = async (driveRelPath, options = {}) => {
+  const base = getCompanionDriveBaseUrl();
+  if (!base) throw new Error('Companion server URL not configured.');
+  const url = `${base}/api/drive${driveRelPath}`;
+  const response = await fetchWithTimeout(url, {
     ...options,
+    credentials: 'include',
     headers: {
       ...(options.headers || {}),
-      Authorization: `Bearer ${accessToken}`,
     },
   });
-
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Google Drive ${response.status}: ${text || response.statusText}`);
+    const body = await response.text();
+    const error = new Error(`Drive proxy ${options.method || 'GET'} ${driveRelPath} failed: ${response.status} ${body}`);
+    error.status = response.status;
+    throw error;
   }
-
   if (response.status === 204) return null;
   return response.json();
+};
+
+const authorizedJsonFetch = async (accessToken, url, options = {}) => {
+  if (isCompanionToken(accessToken)) {
+    // Route through companion proxy: strip Google API base to get relative path
+    let relativePath = url;
+    if (url.startsWith('https://www.googleapis.com/drive/v3')) {
+      relativePath = url.replace('https://www.googleapis.com/drive/v3', '');
+    } else if (url.startsWith('https://www.googleapis.com/upload/drive/v3')) {
+      relativePath = url.replace('https://www.googleapis.com/upload/drive/v3', '');
+    }
+    return companionDriveJsonFetch(relativePath, options);
+  }
+  return fetchJson(
+    url,
+    {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
 };
 
 const buildMultipartRequest = (metadata, payload) => {
@@ -388,50 +650,56 @@ const buildMultipartRequest = (metadata, payload) => {
   };
 };
 
+const listDriveFilesPaged = async (accessToken, initialParams) => {
+  const files = [];
+  let nextPageToken = '';
+
+  for (let pageIndex = 0; pageIndex < DRIVE_LIST_MAX_PAGES; pageIndex += 1) {
+    const params = new URLSearchParams(initialParams);
+    params.set('pageSize', `${DRIVE_LIST_PAGE_SIZE}`);
+    params.set('fields', `${params.get('fields') || ''}${params.get('fields') ? ',' : ''}nextPageToken`);
+    if (nextPageToken) params.set('pageToken', nextPageToken);
+    const data = await authorizedJsonFetch(accessToken, `${driveApi('/files')}?${params.toString()}`);
+    files.push(...(data?.files || []));
+    nextPageToken = `${data?.nextPageToken || ''}`.trim();
+    if (!nextPageToken) break;
+  }
+
+  return files;
+};
+
 export const listGoogleDriveSyncFiles = async (accessToken) => {
   const config = getGoogleDriveConfig();
-  const params = new URLSearchParams({
+  return listDriveFilesPaged(accessToken, {
     spaces: 'appDataFolder',
     q: `name='${escapeDriveQueryValue(config.fileName)}' and trashed=false`,
-    pageSize: '10',
     fields: 'files(id,name,modifiedTime,size)',
     orderBy: 'modifiedTime desc',
   });
-  const data = await authorizedJsonFetch(accessToken, `${driveApi('/files')}?${params.toString()}`);
-  return data?.files || [];
 };
 
 const listVisibleDriveFolders = async (accessToken, folderName) => {
-  const params = new URLSearchParams({
+  return listDriveFilesPaged(accessToken, {
     q: `mimeType='${DRIVE_FOLDER_MIME}' and name='${escapeDriveQueryValue(folderName)}' and trashed=false`,
-    pageSize: '10',
     fields: 'files(id,name,modifiedTime)',
     orderBy: 'modifiedTime desc',
   });
-  const data = await authorizedJsonFetch(accessToken, `${driveApi('/files')}?${params.toString()}`);
-  return data?.files || [];
 };
 
 const listVisibleDriveSyncFiles = async (accessToken, folderId, fileName) => {
-  const params = new URLSearchParams({
+  return listDriveFilesPaged(accessToken, {
     q: `'${folderId}' in parents and name='${escapeDriveQueryValue(fileName)}' and trashed=false`,
-    pageSize: '10',
     fields: 'files(id,name,modifiedTime,size,parents)',
     orderBy: 'modifiedTime desc',
   });
-  const data = await authorizedJsonFetch(accessToken, `${driveApi('/files')}?${params.toString()}`);
-  return data?.files || [];
 };
 
 const listVisibleDriveSyncFilesGlobal = async (accessToken, fileName) => {
-  const params = new URLSearchParams({
+  return listDriveFilesPaged(accessToken, {
     q: `name='${escapeDriveQueryValue(fileName)}' and trashed=false`,
-    pageSize: '10',
     fields: 'files(id,name,modifiedTime,size,parents)',
     orderBy: 'modifiedTime desc',
   });
-  const data = await authorizedJsonFetch(accessToken, `${driveApi('/files')}?${params.toString()}`);
-  return data?.files || [];
 };
 
 const createVisibleDriveFolder = async (accessToken, folderName) => authorizedJsonFetch(

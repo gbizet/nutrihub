@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
-import Link from '@docusaurus/Link';
-import Layout from '@theme/Layout';
+import { Link } from 'react-router-dom';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { formatMacrosLine, useDashboardState } from '../lib/dashboardStore';
 import {
@@ -9,25 +9,20 @@ import {
   aggregateWeightByDay,
   isoDaysWindow,
   pointDelta,
+  toSeriesValue,
 } from '../lib/charts';
 import { dailyActionPlan, readinessScore } from '../lib/coachEngine';
 import { countLoggedMeals, getSessionsForDate, getWorkoutsForDate } from '../lib/domainModel';
 import { rankWorkedMuscleGroups } from '../lib/exerciseKnowledge.js';
 import { getHealthSnapshotForDate, getHealthSnapshotsForDates } from '../lib/healthState.js';
+import { METRICS, clampPercent, formatMetric } from '../lib/nutritionAnalytics.js';
 import InteractiveLineChart from '../components/InteractiveLineChart';
 import CoreWorkflowNav from '../components/CoreWorkflowNav';
 import DateNav from '../components/DateNav';
 
-const SUPPORT_LINKS = [
-  { to: '/foods', title: 'Foods', text: 'Bibliotheque support et nettoyage anti-doublons.' },
-  { to: '/neat', title: 'NEAT', text: 'Pas, cardio, depense active et jours off.' },
-  { to: '/integrations', title: 'Sync', text: 'Google Drive, wearable CSV et synchro multi-device simple.' },
-  { to: '/data-admin', title: 'Data', text: 'Import, export, snapshots et patchs bruts.' },
-  { to: '/summary', title: 'Resume', text: 'Vue secondaire de controle, hors parcours principal.' },
-];
-
 const formatDelta = (value, unit = '') => `${value >= 0 ? '+' : ''}${value.toFixed(1)}${unit}`;
 const formatMuscleFocus = (rows) => rows.map((row) => row.label).join(' / ');
+const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export default function HomePage() {
   const { state, setState, entriesForSelectedDay, metricsForSelectedDay, dayMacros } = useDashboardState();
@@ -59,6 +54,19 @@ export default function HomePage() {
     () => workoutsForSelectedDay.reduce((sum, workout) => sum + Number(workout.durationMin || 0), 0),
     [workoutsForSelectedDay],
   );
+  const nutritionGoals = useMemo(
+    () => state.goals || { kcal: 2200, protein: 180, carbs: 180, fat: 70 },
+    [state.goals],
+  );
+  const nutritionLimits = useMemo(
+    () => state.limits || {
+      kcal: { min: 2000, max: 2400 },
+      protein: { min: 160, max: 220 },
+      carbs: { min: 120, max: 220 },
+      fat: { min: 45, max: 90 },
+    },
+    [state.limits],
+  );
 
   const days = useMemo(() => isoDaysWindow(state.selectedDate, 7), [state.selectedDate]);
 
@@ -68,23 +76,59 @@ export default function HomePage() {
     [days, state],
   );
   const kcalSeries = useMemo(() => {
+    const entryDates = new Set((state.entries || []).map((entry) => entry.date));
+    const estimatedCaloriesDates = new Set(
+      (state.dailyLogs || [])
+        .filter((log) => log?.caloriesEstimated !== null && log?.caloriesEstimated !== undefined && `${log.caloriesEstimated}`.trim() !== '')
+        .map((log) => log.date),
+    );
     const rows = aggregateNutritionByDay(state.entries, days, state.dailyLogs);
-    return rows.map((row) => ({ date: row.date, value: row.kcal }));
+    return rows.map((row) => ({
+      date: row.date,
+      value: entryDates.has(row.date) || estimatedCaloriesDates.has(row.date) ? toSeriesValue(row.kcal) : null,
+    }));
   }, [days, state.dailyLogs, state.entries]);
-  const sessionsSeries = useMemo(
-    () => aggregateSessionsByDay(state.sessions, days, state.dailyLogs, state.cycleLogs),
-    [days, state.cycleLogs, state.dailyLogs, state.sessions],
-  );
+  const sessionsSeries = useMemo(() => {
+    const rows = aggregateSessionsByDay(state.sessions, days, state.dailyLogs, state.cycleLogs);
+    const completedCycleLogs = new Set(
+      (state.cycleLogs || [])
+        .filter((row) => row?.done || Number(row?.load || 0) > 0)
+        .map((row) => row.date),
+    );
+    const trainingLogDates = new Set(
+      (state.dailyLogs || [])
+        .filter((row) => row?.training)
+        .map((row) => row.date),
+    );
+    const manualSessionDates = new Set((state.sessions || []).map((row) => row.date));
+    const isTodaySelected = state.selectedDate === todayIso();
+    return rows.map((row) => {
+      const hasLoggedTraining = manualSessionDates.has(row.date) || completedCycleLogs.has(row.date) || trainingLogDates.has(row.date);
+      const shouldMaskPendingToday = isTodaySelected && row.date === state.selectedDate && !hasLoggedTraining;
+      return {
+        date: row.date,
+        value: shouldMaskPendingToday ? null : toSeriesValue(row.value),
+      };
+    });
+  }, [days, state.cycleLogs, state.dailyLogs, state.selectedDate, state.sessions]);
 
   const weightDelta = pointDelta(weightSeries);
   const kcalDelta = pointDelta(kcalSeries);
   const sessionsDelta = pointDelta(sessionsSeries);
   const sleepSeries = useMemo(
-    () => healthWindow.map((row) => ({ date: row.date, value: row.sleepHours || 0 })),
+    () => healthWindow.map((row) => ({ date: row.date, value: toSeriesValue(row.sleepHours, { zeroIsMissing: true }) })),
     [healthWindow],
   );
   const stepsSeries = useMemo(
-    () => healthWindow.map((row) => ({ date: row.date, value: row.steps || 0 })),
+    () => healthWindow.map((row) => ({ date: row.date, value: toSeriesValue(row.steps, { zeroIsMissing: true }) })),
+    [healthWindow],
+  );
+  const bpSystolicSeries = useMemo(
+    () => healthWindow.map((row) => ({ date: row.date, value: row.bloodPressureSystolic ?? null })),
+    [healthWindow],
+  );
+  const bpDiastolicSeries = useMemo(
+    () => healthWindow.map((row) => ({ date: row.date, value: row.bloodPressureDiastolic ?? null })),
     [healthWindow],
   );
 
@@ -100,6 +144,62 @@ export default function HomePage() {
     ].filter(Boolean);
     return dates.sort().at(-1) || '';
   }, [state.dailyLogs, state.metrics, state.neatLogs]);
+  const homeSummaryCards = useMemo(() => ([
+    {
+      label: 'Readiness',
+      value: `${readiness}/100`,
+      meta: selectedHealth.sleepHours > 0 ? `${selectedHealth.sleepHours.toFixed(1)} h sommeil` : 'Sommeil -',
+    },
+    {
+      label: 'Poids',
+      value: metricsForSelectedDay?.weight ? `${Number(metricsForSelectedDay.weight).toFixed(1)} kg` : '-',
+      meta: `Kcal 7j ${weeklyCalories.toFixed(0)}`,
+    },
+    {
+      label: 'Training',
+      value: workoutsForSelectedDay.length ? `${trainingSetsForSelectedDay} sets` : 'Repos',
+      meta: workoutsForSelectedDay.length
+        ? `${trainingFocusLabel}${trainingDurationForSelectedDay > 0 ? ` | ${trainingDurationForSelectedDay} min` : ''}`
+        : 'Aucun workout logge',
+    },
+    {
+      label: 'Sante',
+      value: selectedHealth.steps ? `${selectedHealth.steps} pas` : '-',
+      meta: latestHealthDate ? `Maj ${latestHealthDate}` : 'Aucune donnee sante',
+    },
+  ]), [
+    latestHealthDate,
+    metricsForSelectedDay?.weight,
+    readiness,
+    selectedHealth.sleepHours,
+    selectedHealth.steps,
+    trainingDurationForSelectedDay,
+    trainingFocusLabel,
+    trainingSetsForSelectedDay,
+    weeklyCalories,
+    workoutsForSelectedDay.length,
+  ]);
+  const macroGaugeItems = useMemo(
+    () => METRICS.map((metric) => {
+      const value = Number(dayMacros?.[metric.key] || 0);
+      const min = Number(nutritionLimits?.[metric.key]?.min ?? 0);
+      const max = Number(nutritionLimits?.[metric.key]?.max ?? 0);
+      const goal = Number(nutritionGoals?.[metric.key] ?? 0);
+      const reference = Math.max(goal || 0, max || 0, min || 0, value || 0, 1);
+      const stateKey = value < min ? 'bas' : (max > 0 && value > max ? 'haut' : 'ok');
+      const goalLabel = goal > 0
+        ? `obj ${formatMetric(goal, metric.unit, 0)}`
+        : (max > 0 ? `cible ${min}-${max} ${metric.unit}` : `min ${min} ${metric.unit}`);
+      return {
+        ...metric,
+        value,
+        stateKey,
+        fillPercent: clampPercent(value, reference),
+        goalLabel,
+      };
+    }),
+    [dayMacros, nutritionGoals, nutritionLimits],
+  );
 
   const workflowCards = [
     {
@@ -126,31 +226,62 @@ export default function HomePage() {
         : 'Aucun workout logge',
     },
     {
-      to: '/prompt-builder',
-      title: 'Export AI',
-      eyebrow: 'Analyse sur periode',
-      value: `${days.length} jours`,
-      meta: 'JSON propre + prompt pret a coller',
+      to: '/support',
+      title: 'Support',
+      eyebrow: 'Surfaces secondaires',
+      value: '6 outils',
+      meta: 'Export AI, Sync, NEAT, Audit, Admin',
     },
   ];
 
   return (
-    <Layout title="Pilotage cut et home gym" description="Hub V2 recentre sur poids, nutrition, training et export AI">
+    <Layout
+      title="Pilotage cut et home gym"
+      description="Hub V2 recentre sur accueil, poids, nutrition et training"
+      mobileTitleShort="Accueil"
+    >
       <main className={styles.page}>
         <div className={styles.container}>
           <section className={styles.hero}>
-            <h1>Pilotage cut et home gym</h1>
-            <p>Quatre workflows coeur. Une seule question: ou en es-tu aujourd hui, et quoi faire ensuite.</p>
-            <div className={styles.metaRow}>
-              <DateNav value={state.selectedDate} onChange={(date) => setState((prev) => ({ ...prev, selectedDate: date }))} />
-              <span className={styles.pill}>Readiness: {readiness}/100</span>
-              <span className={styles.pill}>Poids: {metricsForSelectedDay?.weight ? `${Number(metricsForSelectedDay.weight).toFixed(1)} kg` : '-'}</span>
-              <span className={styles.pill}>Kcal 7j: {weeklyCalories.toFixed(0)}</span>
-              <span className={`${styles.pill} ${styles.pillMuted}`}>Sommeil: {selectedHealth.sleepHours > 0 ? `${selectedHealth.sleepHours.toFixed(1)} h` : '-'}</span>
-              <span className={`${styles.pill} ${styles.pillMuted}`}>Pas: {selectedHealth.steps || '-'}</span>
-              <span className={`${styles.pill} ${styles.pillMuted}`}>FC repos: {selectedHealth.restingBpm || '-'}</span>
+            <div className={styles.heroHeaderRow}>
+              <div className={styles.heroTitleWrap}>
+                <span className={styles.heroEyebrow}>Pilotage quotidien</span>
+                <h1>Pilotage cut et home gym</h1>
+                <p>Vue mobile compacte: les signaux utiles d abord, puis les workflows coeur.</p>
+              </div>
+              <div className={styles.heroControlCard}>
+                <span className={styles.smallMuted}>Jour actif</span>
+                <DateNav value={state.selectedDate} onChange={(date) => setState((prev) => ({ ...prev, selectedDate: date }))} />
+                <span className={styles.smallMuted}>Tension {selectedHealth.bloodPressure || '-'} | repas {loggedMealsForSelectedDay}</span>
+              </div>
             </div>
-            <CoreWorkflowNav active="home" showSupport />
+            <div className={styles.summaryStrip}>
+              {homeSummaryCards.map((item) => (
+                <div key={item.label} className={styles.summaryMetric}>
+                  <div className={styles.summaryMetricLabel}>{item.label}</div>
+                  <div className={styles.summaryMetricValue}>{item.value}</div>
+                  <div className={styles.summaryMetricMeta}>{item.meta}</div>
+                </div>
+              ))}
+            </div>
+            <div className={styles.macroGaugeGrid}>
+              {macroGaugeItems.map((metric) => (
+                <Link key={metric.key} className={styles.macroGaugeCard} to="/nutrition">
+                  <div className={styles.macroGaugeTop}>
+                    <span className={styles.macroGaugeLabel}>{metric.label}</span>
+                    <strong className={styles.macroGaugeValue}>{formatMetric(metric.value, metric.unit, 0)}</strong>
+                  </div>
+                  <div className={styles.macroGaugeMeta}>{metric.goalLabel}</div>
+                  <div className={styles.macroGaugeTrack}>
+                    <div
+                      className={`${styles.macroGaugeFill} ${styles[`heroFill${metric.stateKey}`]}`}
+                      style={{ width: `${metric.fillPercent}%` }}
+                    />
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <CoreWorkflowNav active="home" supportMode="hub" />
           </section>
 
           <section className={styles.workflowGrid}>
@@ -172,16 +303,13 @@ export default function HomePage() {
               </div>
               <div className={styles.insightGrid}>
                 <div className={styles.insightItem}><div className={styles.insightLabel}>Sommeil</div><div className={styles.insightValue}>{selectedHealth.sleepHours > 0 ? `${selectedHealth.sleepHours.toFixed(1)} h` : '-'}</div></div>
-                <div className={styles.insightItem}><div className={styles.insightLabel}>FC repos</div><div className={styles.insightValue}>{selectedHealth.restingBpm || '-'}</div></div>
                 <div className={styles.insightItem}><div className={styles.insightLabel}>FC moyenne</div><div className={styles.insightValue}>{selectedHealth.avgHeartRate || '-'}</div></div>
-                <div className={styles.insightItem}><div className={styles.insightLabel}>HRV</div><div className={styles.insightValue}>{selectedHealth.hrvMs || '-'}</div></div>
                 <div className={styles.insightItem}><div className={styles.insightLabel}>Tension</div><div className={styles.insightValue}>{selectedHealth.bloodPressure || '-'}</div></div>
                 <div className={styles.insightItem}><div className={styles.insightLabel}>Oxygene</div><div className={styles.insightValue}>{selectedHealth.oxygenSaturationPercent ? `${selectedHealth.oxygenSaturationPercent.toFixed(1)}%` : '-'}</div></div>
-                <div className={styles.insightItem}><div className={styles.insightLabel}>Glycemie</div><div className={styles.insightValue}>{selectedHealth.bloodGlucoseMgDl ? `${selectedHealth.bloodGlucoseMgDl.toFixed(0)} mg/dL` : '-'}</div></div>
                 <div className={styles.insightItem}><div className={styles.insightLabel}>Pas</div><div className={styles.insightValue}>{selectedHealth.steps || '-'}</div></div>
                 <div className={styles.insightItem}><div className={styles.insightLabel}>Dernier jour sante</div><div className={styles.insightValue}>{latestHealthDate || '-'}</div></div>
               </div>
-              {!selectedHealth.sleepHours && !selectedHealth.steps && !selectedHealth.restingBpm ? (
+              {!selectedHealth.sleepHours && !selectedHealth.steps && !selectedHealth.avgHeartRate && !selectedHealth.bloodPressure ? (
                 <p className={styles.smallMuted} style={{ marginTop: '0.7rem' }}>
                   Aucune donnee sante exacte sur {state.selectedDate}. Dernier jour remonte: {latestHealthDate || 'inconnu'}.
                 </p>
@@ -253,52 +381,62 @@ export default function HomePage() {
             </article>
           </section>
 
-          <section className={styles.grid2}>
-            <article className={styles.card}>
-              <div className={styles.sectionHead}>
-                <h2 style={{ marginBottom: 0 }}>Sommeil 7j</h2>
-                <span className={styles.smallMuted}>bridge sante commun</span>
-              </div>
-              <InteractiveLineChart
-                ariaLabel="Sommeil 7 jours interactif"
-                xLabel="Date"
-                yLabel="heures"
-                series={[{ id: 'sleep', label: 'Sommeil', color: '#0f172a', data: sleepSeries }]}
-                valueFormat={(v) => `${Number(v).toFixed(1)} h`}
-                dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
-              />
-            </article>
-
-            <article className={styles.card}>
-              <div className={styles.sectionHead}>
-                <h2 style={{ marginBottom: 0 }}>Pas 7j</h2>
-                <span className={styles.smallMuted}>NEAT / activite</span>
-              </div>
-              <InteractiveLineChart
-                ariaLabel="Pas 7 jours interactif"
-                xLabel="Date"
-                yLabel="pas"
-                series={[{ id: 'steps', label: 'Pas', color: '#2563eb', data: stepsSeries }]}
-                valueFormat={(v) => `${Number(v).toFixed(0)}`}
-                dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
-              />
-            </article>
-          </section>
-
           <section>
-            <article className={`${styles.card} ${styles.supportPanel}`}>
-              <h2>Support</h2>
-              <div className={styles.linkGrid}>
-                {SUPPORT_LINKS.map((item) => (
-                  <Link key={item.to} className={styles.linkCard} to={item.to}>
-                    <strong>{item.title}</strong>
-                    <p className={styles.smallMuted}>{item.text}</p>
-                  </Link>
-                ))}
+            <details open className={`${styles.card} ${styles.detailsCard}`}>
+              <summary className={styles.cardSummary}>Tendances secondaires</summary>
+              <div className={styles.grid2}>
+                <article className={styles.card}>
+                  <div className={styles.sectionHead}>
+                    <h2 style={{ marginBottom: 0 }}>Sommeil 7j</h2>
+                    <span className={styles.smallMuted}>bridge sante commun</span>
+                  </div>
+                  <InteractiveLineChart
+                    ariaLabel="Sommeil 7 jours interactif"
+                    xLabel="Date"
+                    yLabel="heures"
+                    series={[{ id: 'sleep', label: 'Sommeil', color: '#0f172a', data: sleepSeries }]}
+                    valueFormat={(v) => `${Number(v).toFixed(1)} h`}
+                    dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
+                    onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
+                  />
+                </article>
+
+                <article className={styles.card}>
+                  <div className={styles.sectionHead}>
+                    <h2 style={{ marginBottom: 0 }}>Pas 7j</h2>
+                    <span className={styles.smallMuted}>NEAT / activite</span>
+                  </div>
+                  <InteractiveLineChart
+                    ariaLabel="Pas 7 jours interactif"
+                    xLabel="Date"
+                    yLabel="pas"
+                    series={[{ id: 'steps', label: 'Pas', color: '#2563eb', data: stepsSeries }]}
+                    valueFormat={(v) => `${Number(v).toFixed(0)}`}
+                    dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
+                    onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
+                  />
+                </article>
+
+                <article className={styles.card}>
+                  <div className={styles.sectionHead}>
+                    <h2 style={{ marginBottom: 0 }}>Tension 7j</h2>
+                    <span className={styles.smallMuted}>systolique / diastolique</span>
+                  </div>
+                  <InteractiveLineChart
+                    ariaLabel="Tension arterielle 7 jours interactif"
+                    xLabel="Date"
+                    yLabel="mmHg"
+                    series={[
+                      { id: 'bp-sys', label: 'Systolique', color: '#7c2d12', data: bpSystolicSeries },
+                      { id: 'bp-dia', label: 'Diastolique', color: '#b45309', data: bpDiastolicSeries },
+                    ]}
+                    valueFormat={(v) => `${Number(v).toFixed(0)}`}
+                    dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
+                    onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
+                  />
+                </article>
               </div>
-            </article>
+            </details>
           </section>
         </div>
       </main>

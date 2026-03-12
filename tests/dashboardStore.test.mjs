@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   hydrateStateFromSyncEnvelope,
+  hydratePersistedState,
   mergeIncomingStatePreservingLocalSession,
   persistDashboardState,
   readPersistedDashboardState,
@@ -28,6 +29,10 @@ test('sync envelope hydration uses remote updated_at as local updatedAt', () => 
 test('sync envelope hydration rejects invalid payloads', () => {
   assert.equal(hydrateStateFromSyncEnvelope(null), null);
   assert.equal(hydrateStateFromSyncEnvelope({ updated_at: '2026-03-09T15:12:00.000Z', payload: null }), null);
+});
+
+test('persisted state hydration rejects invalid top-level field types', () => {
+  assert.equal(hydratePersistedState({ foods: 'not-an-array' }), null);
 });
 
 test('persisted storage is updated immediately after hydrating a pulled envelope', () => {
@@ -71,20 +76,17 @@ test('mergeIncomingStatePreservingLocalSession keeps local selected date and lay
     {
       selectedDate: '2026-03-09',
       layouts: { training: [{ id: 'progress', span: 12 }] },
-      dashboards: { active: 'default', profiles: { default: ['quick'] } },
       stateSnapshots: [{ id: 'snap-1' }],
     },
     {
       selectedDate: '2026-03-01',
       layouts: { training: [{ id: 'log', span: 6 }] },
-      dashboards: { active: 'remote', profiles: { default: ['remote'] } },
       updatedAt: '2026-03-09T15:12:00.000Z',
     },
   );
 
   assert.equal(merged.selectedDate, '2026-03-09');
   assert.deepEqual(merged.layouts.training, [{ id: 'progress', span: 12 }]);
-  assert.equal(merged.dashboards.active, 'default');
   assert.equal(merged.stateSnapshots.length, 1);
   assert.equal(merged.updatedAt, '2026-03-09T15:12:00.000Z');
 });

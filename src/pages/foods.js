@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import Link from '@docusaurus/Link';
-import Layout from '@theme/Layout';
+import { Link } from 'react-router-dom';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { computeMacrosForAmount, normalizeFood, toNumber, toPositive, useDashboardState } from '../lib/dashboardStore';
 import { searchFoodWeb } from '../lib/foodSearch';
@@ -399,10 +399,10 @@ export default function FoodsPage() {
             <h1>Base aliments</h1>
             <p>Bibliotheque support. A utiliser pour nettoyer, enrichir et fiabiliser la saisie nutrition.</p>
             <div className={styles.metaRow}>
-              <Link className={`${styles.pill} ${styles.pillMuted}`} to="/metrics">Saisie poids</Link>
-              <Link className={`${styles.pill} ${styles.pillMuted}`} to="/nutrition">Journal nutrition</Link>
+              <Link className={styles.compactActionLink} to="/metrics">Saisie poids</Link>
+              <Link className={styles.compactActionLink} to="/nutrition">Journal nutrition</Link>
             </div>
-            <CoreWorkflowNav active="foods" showSupport />
+            <CoreWorkflowNav active="foods" supportMode="full" />
           </section>
 
           <section className={styles.grid2}>
@@ -501,18 +501,21 @@ export default function FoodsPage() {
             </article>
           </section>
 
-          <section className={styles.grid2}>
-            <article className={styles.card}>
+          <section>
+            <details className={`${styles.card} ${styles.detailsCard}`}>
+              <summary className={styles.cardSummary}>Import / Export JSON</summary>
               <div className={styles.sectionHead}>
                 <h2>Import / Export JSON</h2>
                 <button className={styles.buttonGhost} type="button" onClick={exportJson}>Exporter</button>
               </div>
               <textarea className={styles.textarea} value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="JSON aliments..." />
               <button className={styles.button} type="button" onClick={importJson}>Importer JSON</button>
-            </article>
+            </details>
+          </section>
 
-            <article className={styles.card}>
-              <h2>Base actuelle ({uniqueFoods.length})</h2>
+          <section>
+            <details className={`${styles.card} ${styles.detailsCard}`}>
+              <summary className={styles.cardSummary}>Base actuelle ({uniqueFoods.length})</summary>
               <table className={styles.table}>
                 <thead>
                   <tr>
@@ -552,7 +555,7 @@ export default function FoodsPage() {
                   ))}
                 </tbody>
               </table>
-            </article>
+            </details>
           </section>
         </div>
       </main>

@@ -22,6 +22,18 @@ L'app tourne sur:
 - app: `http://localhost:3000/`
 - state server local: `http://localhost:8787`
 
+`npm run dev` lance maintenant Vite en mode `local-state` avec:
+
+- `VITE_REMOTE_STATE_URL=http://127.0.0.1:8787/api/state`
+- `VITE_REMOTE_STATE_TOKEN=dev-local-state-token`
+- state server compagnon borne a `127.0.0.1`, avec CORS strict et bearer token
+
+Si tu veux le front sans sync locale distante:
+
+```sh
+npm run start:app
+```
+
 Important:
 
 - n'utilise plus `http://localhost:3000/test/`
@@ -107,6 +119,25 @@ Strategie actuelle:
 2. lecture/ecriture d'un fichier JSON unique de sync
 3. comparaison des enveloppes via `updated_at`
 4. pull/push manuel si conflit
+
+Durcissement actuel:
+
+- session web Drive stockee en `sessionStorage` (plus de persistance en `localStorage`)
+- logs sync redacts pour les champs `token` / `Authorization`
+- pagination Drive geree sur les listings de fichiers
+
+## State server local
+
+Le serveur compagnon local est reserve au dev local et n'est plus un endpoint ouvert par defaut.
+
+Comportement:
+
+- bind par defaut sur `127.0.0.1`
+- activation explicite via `STATE_ENABLE=1`
+- CORS borne a `STATE_ALLOWED_ORIGIN` (par defaut `http://127.0.0.1:3000`)
+- bearer token via `STATE_API_TOKEN`
+- validation du schema du state avant ecriture
+- rate limit memoire simple et logs d'audit JSON
 
 ## Sante Android
 

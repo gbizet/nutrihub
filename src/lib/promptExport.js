@@ -73,28 +73,114 @@ export const buildIsoRange = (startIso, endIso) => {
   };
 };
 
+const formatClockFromIso = (value, withSeconds = false) => {
+  const raw = `${value || ''}`.trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+  const base = `${date.getHours()}`.padStart(2, '0') + ':' + `${date.getMinutes()}`.padStart(2, '0');
+  return withSeconds ? `${base}:${`${date.getSeconds()}`.padStart(2, '0')}` : base;
+};
+
+const formatTimerDuration = (valueInSeconds) => {
+  const seconds = Number(valueInSeconds);
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  const safe = Math.round(seconds);
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  if (mins < 60) return `${mins}:${`${secs}`.padStart(2, '0')}`;
+  const hours = Math.floor(mins / 60);
+  return `${hours}:${`${mins % 60}`.padStart(2, '0')}:${`${secs}`.padStart(2, '0')}`;
+};
+
+const formatCompactLoad = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '0';
+  return Number.isInteger(numeric) ? `${numeric}` : numeric.toFixed(1).replace(/\.0$/, '');
+};
+
+const formatSetTimeline = (setDetails = []) => {
+  const visibleSets = setDetails.slice(0, 8);
+  if (!visibleSets.length) return '';
+
+  const timeline = visibleSets.map((setRow, index) => {
+    const setNumber = Number(setRow.setIndex || (index + 1));
+    const reps = Number(setRow.reps || 0);
+    const load = formatCompactLoad(setRow.loadDisplayed || setRow.loadEstimated || 0);
+    const timeLabel = formatClockFromIso(setRow.loggedAt, true) || `${setRow.timeLabel || ''}`.trim();
+    const note = `${setRow.setNote || ''}`.trim();
+    const parts = [`S${setNumber} ${reps}x${load}kg`];
+
+    if (timeLabel) parts.push(`@ ${timeLabel}`);
+
+    if (setRow.elapsedSinceWorkoutStartSec !== null && setRow.elapsedSinceWorkoutStartSec !== undefined) {
+      const elapsedLabel = formatTimerDuration(setRow.elapsedSinceWorkoutStartSec);
+      if (elapsedLabel) parts.push(`t+ ${elapsedLabel}`);
+    }
+
+    if (setRow.restSincePreviousSetSec !== null && setRow.restSincePreviousSetSec !== undefined) {
+      const restLabel = formatTimerDuration(setRow.restSincePreviousSetSec);
+      if (restLabel) parts.push(`R ${restLabel}`);
+    }
+
+    if (note) parts.push(note);
+
+    return parts.join(' ');
+  }).join(' | ');
+
+  const hiddenCount = Math.max(0, setDetails.length - visibleSets.length);
+  return hiddenCount > 0 ? `${timeline} | +${hiddenCount} sets` : timeline;
+};
+
 const formatTrainingLine = (session) => {
   if (Array.isArray(session.setDetails) && session.setDetails.length > 0) {
     const repsTotal = session.setDetails.reduce((acc, setRow) => acc + Number(setRow.reps || 0), 0);
     const topDisplayed = session.setDetails.reduce((max, setRow) => Math.max(max, Number(setRow.loadDisplayed || 0)), 0);
     const topEstimated = session.setDetails.reduce((max, setRow) => Math.max(max, Number(setRow.loadEstimated || 0)), 0);
     const topEstimatedText = topEstimated > 0 ? ` | reel estime ~${topEstimated}kg` : '';
-    return `- ${session.exerciseName}: ${session.setDetails.length} series, ${repsTotal} reps, top ${topDisplayed}kg${topEstimatedText}`;
+    const setTimeline = formatSetTimeline(session.setDetails);
+    return `- ${session.exerciseName}: ${session.setDetails.length} series, ${repsTotal} reps, top ${topDisplayed}kg${topEstimatedText}${setTimeline ? ` | sets ${setTimeline}` : ''}`;
   }
-  return `- ${session.exerciseName}: ${session.sets}x${session.reps} @ ${session.load}kg, RIR ${session.rir || '-'}`;
+  return `- ${session.exerciseName}: ${session.sets}x${session.reps} @ ${session.load}kg`;
 };
 
 const normalizedSetDetails = (session) => {
   if (Array.isArray(session.setDetails) && session.setDetails.length > 0) {
-    return session.setDetails.map((setRow, index) => ({
-      set: Number(setRow.setIndex || (index + 1)),
-      reps: Number(setRow.reps || 0),
-      load_displayed_kg: Number(setRow.loadDisplayed || setRow.loadEstimated || 0),
-      load_estimated_kg:
-        setRow.loadEstimated === null || setRow.loadEstimated === undefined
-          ? null
-          : Number(setRow.loadEstimated || 0),
-    }));
+    return session.setDetails
+      .map((setRow, index) => ({
+        set: Number(setRow.setIndex || (index + 1)),
+        reps: Number(setRow.reps || 0),
+        load_displayed_kg: Number(setRow.loadDisplayed || setRow.loadEstimated || 0),
+        load_estimated_kg:
+          setRow.loadEstimated === null || setRow.loadEstimated === undefined
+            ? null
+            : Number(setRow.loadEstimated || 0),
+        logged_at: `${setRow.loggedAt || ''}`.trim() || null,
+        elapsed_since_workout_start_sec:
+          setRow.elapsedSinceWorkoutStartSec === null || setRow.elapsedSinceWorkoutStartSec === undefined
+            ? null
+            : Number(setRow.elapsedSinceWorkoutStartSec || 0),
+        elapsed_since_workout_start_timer:
+          setRow.elapsedSinceWorkoutStartSec === null || setRow.elapsedSinceWorkoutStartSec === undefined
+            ? null
+            : formatTimerDuration(setRow.elapsedSinceWorkoutStartSec) || null,
+        rest_since_previous_set_sec:
+          setRow.restSincePreviousSetSec === null || setRow.restSincePreviousSetSec === undefined
+            ? null
+            : Number(setRow.restSincePreviousSetSec || 0),
+        rest_since_previous_set_timer:
+          setRow.restSincePreviousSetSec === null || setRow.restSincePreviousSetSec === undefined
+            ? null
+            : formatTimerDuration(setRow.restSincePreviousSetSec) || null,
+        time_label: `${setRow.timeLabel || ''}`.trim() || null,
+        logged_clock_time: formatClockFromIso(setRow.loggedAt, true) || null,
+        set_note: `${setRow.setNote || ''}`.trim() || null,
+      }))
+      .sort((a, b) => a.set - b.set)
+      .map((row, index) => ({
+        ...row,
+        set: index + 1,
+      }));
   }
   const sets = Math.max(1, Number(session.sets || 0));
   const reps = Number(session.reps || 0);
@@ -104,6 +190,11 @@ const normalizedSetDetails = (session) => {
     reps,
     load_displayed_kg: load,
     load_estimated_kg: null,
+    logged_at: null,
+    elapsed_since_workout_start_sec: null,
+    rest_since_previous_set_sec: null,
+    time_label: null,
+    set_note: null,
   }));
 };
 
@@ -314,7 +405,11 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
       workout_id: workout.workoutId,
       title: workout.title,
       source: workout.source || 'manual',
+      started_at: workout.startedAt || null,
+      ended_at: workout.endedAt || null,
       duration_min: nullIfNonPositive(workout.durationMin),
+      duration_sec: nullIfNonPositive(workout.durationSec),
+      duration_timer: formatTimerDuration(workout.durationSec) || null,
       exercise_count: workout.exerciseCount,
       primary_muscles: rankWorkedMuscleGroups(workout.exercises, state.exerciseMuscleOverrides, { limit: 3 }).map((row) => ({
         group: row.group,
@@ -327,6 +422,7 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
         return {
           index: index + 1,
           exercise_id: session.exerciseId || null,
+          exercise_order: Number.isFinite(Number(session.exerciseOrder)) ? Number(session.exerciseOrder) : index + 1,
           exercise_name: session.exerciseName || 'Exercice',
           category: session.category || '',
           equipment: session.equipment || '',
@@ -336,7 +432,6 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
           top_load_kg: Number(summary.topLoad.toFixed(1)),
           estimated_1rm_kg: Number(summary.e1rm.toFixed(1)),
           volume_kg_reps: Number(summary.volume.toFixed(1)),
-          rir: session.rir ?? null,
           notes: session.notes || '',
           sets: setDetails,
         };
@@ -349,12 +444,14 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
       sets: acc.sets + workout.exercises.reduce((sum, exercise) => sum + Number(exercise.sets_count || 0), 0),
       reps: acc.reps + workout.exercises.reduce((sum, exercise) => sum + Number(exercise.reps_total || 0), 0),
       volume_kg_reps: acc.volume_kg_reps + workout.exercises.reduce((sum, exercise) => sum + Number(exercise.volume_kg_reps || 0), 0),
+      duration_sec: acc.duration_sec + Number(workout.duration_sec || 0),
     }), {
       workouts: 0,
       exercises: 0,
       sets: 0,
       reps: 0,
       volume_kg_reps: 0,
+      duration_sec: 0,
     });
 
     const dayQualityFlags = [];
@@ -417,6 +514,8 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
           sets: trainingTotals.sets,
           reps: trainingTotals.reps,
           volume_kg_reps: Number(trainingTotals.volume_kg_reps.toFixed(1)),
+          duration_sec: trainingTotals.duration_sec > 0 ? Math.round(trainingTotals.duration_sec) : null,
+          duration_timer: trainingTotals.duration_sec > 0 ? (formatTimerDuration(trainingTotals.duration_sec) || null) : null,
         },
         primary_muscles: rankWorkedMuscleGroups(daySessions, state.exerciseMuscleOverrides, { limit: 3 }).map((row) => ({
           group: row.group,
@@ -475,7 +574,7 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
   const lastWeight = [...daily].reverse().find((day) => day.metrics?.weight_kg !== null && day.metrics?.weight_kg !== undefined)?.metrics?.weight_kg ?? null;
 
   const payload = {
-    export_version: 4,
+    export_version: 5,
     generated_at: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     date_range: {
@@ -509,6 +608,7 @@ export const buildPeriodExport = ({ state, periodRange, limits }) => {
     '2) Points forts et points a corriger.',
     '3) Plan 7 jours: cible kcal/proteines + split training + priorites.',
     '4) Liste des donnees manquantes ou incoherentes.',
+    '5) Exploite aussi le rythme des seances quand des sets ont `logged_clock_time`, `elapsed_since_workout_start_timer`, `rest_since_previous_set_timer` ou quand un workout expose `duration_sec`.',
     '',
     'JSON:',
     payloadJson,

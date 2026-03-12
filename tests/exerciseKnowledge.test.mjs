@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  findCommonExerciseByName,
   resolveMuscleGroup,
   resolveMuscleGroupShares,
   resolveMuscleGroupSharesWithOverrides,
@@ -51,4 +52,10 @@ test('rankWorkedMuscleGroups returns dominant groups from a workout day', () => 
     ranked.map((row) => row.group),
     ['chest', 'back', 'arms'],
   );
+});
+
+test('common home gym presets expose the expected equipment defaults', () => {
+  assert.equal(findCommonExerciseByName('Face Pull')?.equipment, 'Poulies vis-a-vis');
+  assert.equal(findCommonExerciseByName('Tirage vertical poulie double')?.equipment, 'Poulie double');
+  assert.equal(findCommonExerciseByName('Developpe couche')?.equipment, 'Banc + barre olympique + disques');
 });

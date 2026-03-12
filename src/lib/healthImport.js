@@ -10,6 +10,25 @@ import {
 
 const ensureArray = (value) => (Array.isArray(value) ? value : []);
 
+const HEALTH_NUMERIC_BOUNDS = {
+  weightKg: { min: 20, max: 300 },
+  bodyFatPercent: { min: 2, max: 75 },
+  muscleMassKg: { min: 10, max: 200 },
+  visceralFat: { min: 1, max: 60 },
+  waterPercent: { min: 10, max: 80 },
+  steps: { min: 1, max: 100_000 },
+  activeMinutes: { min: 1, max: 1_440 },
+  activeCalories: { min: 1, max: 10_000 },
+  sleepHours: { min: 0.5, max: 24 },
+  restingHeartRate: { min: 30, max: 250 },
+  heartRateAvg: { min: 30, max: 250 },
+  hrvMs: { min: 1, max: 300 },
+  bloodPressureSystolic: { min: 60, max: 260 },
+  bloodPressureDiastolic: { min: 40, max: 160 },
+  oxygenSaturationPercent: { min: 50, max: 100 },
+  bloodGlucoseMgDl: { min: 20, max: 600 },
+};
+
 const upsertByDate = (rows, date, buildNext) => {
   const list = ensureArray(rows);
   const index = list.findIndex((entry) => entry.date === date);
@@ -20,14 +39,77 @@ const upsertByDate = (rows, date, buildNext) => {
 };
 
 const toIsoDate = (value) => `${value || ''}`.slice(0, 10);
-
 const cleanText = (value) => `${value || ''}`.trim();
-
 const resolveRowProvider = (row, fallbackProvider) => cleanText(row?.provider) || fallbackProvider;
+
 const resolvePositiveOptionalMetric = (incomingValue, existingValue) => {
   if (incomingValue !== null && incomingValue !== undefined) return incomingValue;
   return Number(existingValue || 0) > 0 ? existingValue : undefined;
 };
+
+const pushValidationWarning = (warnings, row, field, value, bounds) => {
+  warnings.push({
+    code: 'HEALTH_VALUE_OUT_OF_RANGE',
+    field,
+    value,
+    min: bounds.min,
+    max: bounds.max,
+    date: toIsoDate(row?.date || row?.capturedAt || row?.endTime),
+    sourcePackage: cleanText(row?.sourcePackage),
+    sourceRecordId: cleanText(row?.sourceRecordId),
+  });
+};
+
+const sanitizeBoundedNumber = (row, field, warnings) => {
+  const rawValue = row?.[field];
+  if (rawValue === null || rawValue === undefined || rawValue === '') return rawValue;
+  const numeric = Number(rawValue);
+  const bounds = HEALTH_NUMERIC_BOUNDS[field];
+  if (!Number.isFinite(numeric) || !bounds || numeric < bounds.min || numeric > bounds.max) {
+    pushValidationWarning(warnings, row, field, rawValue, bounds);
+    return undefined;
+  }
+  return numeric;
+};
+
+const sanitizeBodyMetricsRow = (row, warnings) => ({
+  ...row,
+  weightKg: sanitizeBoundedNumber(row, 'weightKg', warnings),
+  bodyFatPercent: sanitizeBoundedNumber(row, 'bodyFatPercent', warnings),
+  muscleMassKg: sanitizeBoundedNumber(row, 'muscleMassKg', warnings),
+  visceralFat: sanitizeBoundedNumber(row, 'visceralFat', warnings),
+  waterPercent: sanitizeBoundedNumber(row, 'waterPercent', warnings),
+});
+
+const sanitizeActivityRow = (row, warnings) => ({
+  ...row,
+  steps: sanitizeBoundedNumber(row, 'steps', warnings),
+  activeMinutes: sanitizeBoundedNumber(row, 'activeMinutes', warnings),
+  activeCalories: sanitizeBoundedNumber(row, 'activeCalories', warnings),
+});
+
+const sanitizeSleepRow = (row, warnings) => ({
+  ...row,
+  sleepHours: sanitizeBoundedNumber(row, 'sleepHours', warnings),
+});
+
+const sanitizeVitalsRow = (row, warnings) => ({
+  ...row,
+  restingHeartRate: sanitizeBoundedNumber(row, 'restingHeartRate', warnings),
+  heartRateAvg: sanitizeBoundedNumber(row, 'heartRateAvg', warnings),
+  hrvMs: sanitizeBoundedNumber(row, 'hrvMs', warnings),
+  bloodPressureSystolic: sanitizeBoundedNumber(row, 'bloodPressureSystolic', warnings),
+  bloodPressureDiastolic: sanitizeBoundedNumber(row, 'bloodPressureDiastolic', warnings),
+  oxygenSaturationPercent: sanitizeBoundedNumber(row, 'oxygenSaturationPercent', warnings),
+  bloodGlucoseMgDl: sanitizeBoundedNumber(row, 'bloodGlucoseMgDl', warnings),
+});
+
+const hasBodyMetricsSignal = (row) =>
+  Number(row?.weightKg || 0) > 0
+  || Number(row?.bodyFatPercent || 0) > 0
+  || Number(row?.muscleMassKg || 0) > 0
+  || Number(row?.visceralFat || 0) > 0
+  || Number(row?.waterPercent || 0) > 0;
 
 const hasActivitySignal = (row, fallbackProvider = '') => {
   const provider = resolveRowProvider(row, fallbackProvider);
@@ -38,6 +120,19 @@ const hasActivitySignal = (row, fallbackProvider = '') => {
   if (provider === 'health-connect') return false;
   return activeCalories > 0;
 };
+
+const hasSleepSignal = (row) => Number(row?.sleepHours || 0) > 0;
+
+const hasVitalsSignal = (row) =>
+  Number(row?.restingHeartRate || 0) > 0
+  || Number(row?.heartRateAvg || 0) > 0
+  || Number(row?.hrvMs || 0) > 0
+  || (
+    Number(row?.bloodPressureSystolic || 0) > 0
+    && Number(row?.bloodPressureDiastolic || 0) > 0
+  )
+  || Number(row?.oxygenSaturationPercent || 0) > 0
+  || Number(row?.bloodGlucoseMgDl || 0) > 0;
 
 const isDateInRange = (date, startDate, endDate) => {
   if (!date || !startDate || !endDate) return false;
@@ -56,6 +151,25 @@ const isProviderImportedActivityNoise = (row, provider, startDate, endDate) => (
   )
 );
 
+const sanitizeHealthRecords = (records = {}, fallbackProvider = '') => {
+  const warnings = [];
+  const sanitizedRecords = {
+    bodyMetrics: ensureArray(records.bodyMetrics)
+      .map((row) => sanitizeBodyMetricsRow(row, warnings))
+      .filter(hasBodyMetricsSignal),
+    activity: ensureArray(records.activity)
+      .map((row) => sanitizeActivityRow(row, warnings))
+      .filter((row) => hasActivitySignal(row, cleanText(row?.provider) || fallbackProvider)),
+    sleep: ensureArray(records.sleep)
+      .map((row) => sanitizeSleepRow(row, warnings))
+      .filter(hasSleepSignal),
+    vitals: ensureArray(records.vitals)
+      .map((row) => sanitizeVitalsRow(row, warnings))
+      .filter(hasVitalsSignal),
+  };
+  return { sanitizedRecords, warnings };
+};
+
 export const mergeHealthImportIntoState = (prevState, payload = {}) => {
   const provider = payload.provider || defaultHealthSyncState.provider;
   const importedAt = payload.importedAt || new Date().toISOString();
@@ -64,7 +178,8 @@ export const mergeHealthImportIntoState = (prevState, payload = {}) => {
   const startDate = toIsoDate(payload.startDate);
   const endDate = toIsoDate(payload.endDate);
   const permissions = ensureArray(payload.permissions);
-  const records = payload.records || {};
+  const preexistingWarnings = ensureArray(payload.validationWarnings);
+  const { sanitizedRecords, warnings } = sanitizeHealthRecords(payload.records || {}, provider);
   let metrics = [...(prevState.metrics || [])];
   let neatLogs = [...(prevState.neatLogs || [])].filter(
     (row) => !isProviderImportedActivityNoise(row, provider, startDate, endDate),
@@ -75,7 +190,7 @@ export const mergeHealthImportIntoState = (prevState, payload = {}) => {
   let neatCount = 0;
   let dailyCount = 0;
 
-  ensureArray(records.bodyMetrics).forEach((row) => {
+  ensureArray(sanitizedRecords.bodyMetrics).forEach((row) => {
     const date = toIsoDate(row.date || row.capturedAt);
     if (!date) return;
     const rowProvider = resolveRowProvider(row, provider);
@@ -100,10 +215,9 @@ export const mergeHealthImportIntoState = (prevState, payload = {}) => {
     metricsCount += 1;
   });
 
-  ensureArray(records.activity).forEach((row) => {
-    if (!hasActivitySignal(row, provider)) return;
+  ensureArray(sanitizedRecords.activity).forEach((row) => {
     const date = toIsoDate(row.date || row.capturedAt);
-    if (!date) return;
+    if (!date || !hasActivitySignal(row, provider)) return;
     const rowProvider = resolveRowProvider(row, provider);
     neatLogs = upsertByDate(neatLogs, date, (existing) => ({
       ...(existing || { id: `neat-${date}`, date }),
@@ -125,9 +239,9 @@ export const mergeHealthImportIntoState = (prevState, payload = {}) => {
     neatCount += 1;
   });
 
-  ensureArray(records.sleep).forEach((row) => {
+  ensureArray(sanitizedRecords.sleep).forEach((row) => {
     const date = toIsoDate(row.date || row.endTime || row.capturedAt);
-    if (!date) return;
+    if (!date || !hasSleepSignal(row)) return;
     const rowProvider = resolveRowProvider(row, provider);
     dailyLogs = upsertByDate(dailyLogs, date, (existing) => ({
       ...(existing || { id: `log-${date}`, date }),
@@ -151,9 +265,9 @@ export const mergeHealthImportIntoState = (prevState, payload = {}) => {
     dailyCount += 1;
   });
 
-  ensureArray(records.vitals).forEach((row) => {
+  ensureArray(sanitizedRecords.vitals).forEach((row) => {
     const date = toIsoDate(row.date || row.capturedAt);
-    if (!date) return;
+    if (!date || !hasVitalsSignal(row)) return;
     const rowProvider = resolveRowProvider(row, provider);
     dailyLogs = upsertByDate(dailyLogs, date, (existing) => {
       const systolic = row.bloodPressureSystolic ?? existing?.bloodPressureSystolic ?? null;
@@ -189,28 +303,44 @@ export const mergeHealthImportIntoState = (prevState, payload = {}) => {
     dailyCount += 1;
   });
 
-  const coverage = buildHealthCoverageFromRecords(records, provider);
+  const allWarnings = [...preexistingWarnings, ...warnings];
+  const coverage = buildHealthCoverageFromRecords(sanitizedRecords, provider);
   const lastImportSummary = formatHealthImportSummary({
     metrics: metricsCount,
     neat: neatCount,
     dailyLogs: dailyCount,
   });
+
+  const debugEntries = [];
+  if (allWarnings.length > 0) {
+    debugEntries.push(
+      buildHealthDebugEntry('health import validation warnings', {
+        provider,
+        warningCount: allWarnings.length,
+        warnings: allWarnings.slice(0, 20),
+      }),
+    );
+  }
+  debugEntries.push(
+    buildHealthDebugEntry('health import merged into shared state', {
+      provider,
+      importedAt,
+      importMode,
+      startDate,
+      endDate,
+      deviceName,
+      metricsCount,
+      neatCount,
+      dailyCount,
+      permissions,
+      coverage,
+    }),
+  );
+
   const nextHealthSync = updateHealthSyncAfterImport(
     appendHealthDebugEntries(
       prevState.healthSync || defaultHealthSyncState,
-      buildHealthDebugEntry('health import merged into shared state', {
-        provider,
-        importedAt,
-        importMode,
-        startDate,
-        endDate,
-        deviceName,
-        metricsCount,
-        neatCount,
-        dailyCount,
-        permissions,
-        coverage,
-      }),
+      ...debugEntries,
     ),
     {
       provider,

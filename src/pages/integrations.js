@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Layout from '@theme/Layout';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import {
   DASHBOARD_STATE_EVENT,
@@ -32,6 +32,8 @@ import {
   getRequiredGoogleDriveScopes,
   getStoredGoogleDriveToken,
   ensureGoogleIdentityScript,
+  getCompanionDriveSession,
+  hasActiveCompanionDriveSession,
   isNativeMobileRuntime,
   markDriveSyncCheckpoint,
   revokeGoogleDriveAccess,
@@ -55,6 +57,13 @@ import {
   clearSyncDebugLog,
   formatSyncDebugEntries,
 } from '../lib/syncDebug';
+import { hasOngoingWorkoutDraft } from '../lib/ongoingWorkout.js';
+import {
+  canUseStateServerSnapshots,
+  createStateServerSnapshot,
+  listStateServerSnapshots,
+  restoreStateServerSnapshot,
+} from '../lib/stateRecovery.js';
 
 const parseCsvRows = (text) =>
   `${text || ''}`
@@ -165,6 +174,8 @@ export default function IntegrationsPage() {
   const [healthStatus, setHealthStatus] = useState(() => defaultHealthPlatformStatus());
   const [healthBusy, setHealthBusy] = useState(false);
   const [healthNotice, setHealthNotice] = useState('');
+  const [recoverySnapshots, setRecoverySnapshots] = useState([]);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
 
   const driveConfig = getGoogleDriveConfig();
   const deviceId = ensureDeviceId();
@@ -182,6 +193,8 @@ export default function IntegrationsPage() {
     () => deriveHealthStreamDiagnostics(healthStatus, state.healthSync?.lastCoverage),
     [healthStatus, state.healthSync?.lastCoverage],
   );
+  const ongoingWorkoutActive = hasOngoingWorkoutDraft();
+  const stateServerSnapshotsEnabled = canUseStateServerSnapshots();
 
   const refreshSyncDebugText = () => {
     setSyncDebugText(formatSyncDebugEntries());
@@ -191,6 +204,72 @@ export default function IntegrationsPage() {
     const next = await getHealthIntegrationStatus();
     setHealthStatus(next);
     return next;
+  };
+
+  const refreshRecoverySnapshots = async () => {
+    if (!stateServerSnapshotsEnabled) {
+      setRecoverySnapshots([]);
+      return [];
+    }
+    try {
+      const snapshots = await listStateServerSnapshots();
+      setRecoverySnapshots(snapshots);
+      return snapshots;
+    } catch (error) {
+      appendSyncDebugLog('IntegrationsPage', 'refreshRecoverySnapshots failed', { error });
+      setStatus(error.message || 'Lecture snapshots impossible.');
+      return [];
+    }
+  };
+
+  const createRecoverySnapshot = async (reason, label, stateForSnapshot = canonicalLocalState) => {
+    if (!stateServerSnapshotsEnabled || !stateForSnapshot) return null;
+    try {
+      const snapshot = await createStateServerSnapshot(stateForSnapshot, { reason, label });
+      await refreshRecoverySnapshots();
+      return snapshot;
+    } catch (error) {
+      appendSyncDebugLog('IntegrationsPage', 'createRecoverySnapshot failed', {
+        error,
+        reason,
+        label,
+      });
+      return null;
+    }
+  };
+
+  const handleCreateSnapshotNow = async () => {
+    setSnapshotBusy(true);
+    try {
+      const snapshot = await createRecoverySnapshot('manual-ui', `manual:${canonicalLocalState?.updatedAt || ''}`);
+      setStatus(snapshot?.id ? `Snapshot de secours cree: ${snapshot.id}.` : 'Snapshots serveur indisponibles.');
+    } finally {
+      setSnapshotBusy(false);
+    }
+  };
+
+  const handleRestoreSnapshot = async (snapshotId) => {
+    if (!snapshotId) return;
+    setSnapshotBusy(true);
+    setStatus('Restauration snapshot en cours...');
+    try {
+      await createRecoverySnapshot('before-snapshot-restore', `before-restore:${snapshotId}`);
+      const result = await restoreStateServerSnapshot(snapshotId);
+      if (!result?.state) {
+        setStatus('Snapshot introuvable ou invalide.');
+        return;
+      }
+      replaceState(result.state);
+      persistDashboardState(result.state);
+      setLocalStateSnapshot(result.state);
+      await refreshRecoverySnapshots();
+      setStatus(`Etat local restaure depuis snapshot ${snapshotId}.`);
+    } catch (error) {
+      appendSyncDebugLog('IntegrationsPage', 'handleRestoreSnapshot failed', { error, snapshotId });
+      setStatus(error.message || 'Restauration snapshot impossible.');
+    } finally {
+      setSnapshotBusy(false);
+    }
   };
 
   const importWearable = () => {
@@ -279,6 +358,7 @@ export default function IntegrationsPage() {
     });
     try {
       const latestLocalState = readPersistedDashboardState() || canonicalLocalState;
+      await createRecoverySnapshot('before-drive-push', `push:${latestLocalState?.updatedAt || ''}`, latestLocalState);
       const result = await pushLocalStateToDrive({
         state: latestLocalState,
         preferences: drivePrefs,
@@ -314,6 +394,13 @@ export default function IntegrationsPage() {
   };
 
   const pullDriveToLocal = async () => {
+    if (ongoingWorkoutActive) {
+      appendSyncDebugLog('IntegrationsPage', 'pullDriveToLocal blocked', {
+        cause: 'ongoing-workout-active',
+      });
+      setStatus('Pull bloque: termine ou abandonne la seance en cours avant d importer Drive.');
+      return;
+    }
     setDriveBusy(true);
     setDriveAction('pull');
     setStatus('Pull Drive en cours...');
@@ -323,6 +410,7 @@ export default function IntegrationsPage() {
       remoteUpdatedAt: remoteEnvelope?.updated_at || null,
     });
     try {
+      await createRecoverySnapshot('before-drive-pull', `pull:${canonicalLocalState?.updatedAt || ''}`, canonicalLocalState);
       const result = await pullDriveStateToLocal({
         localState: state,
         preferences: drivePrefs,
@@ -535,6 +623,10 @@ export default function IntegrationsPage() {
   }, []);
 
   useEffect(() => {
+    refreshRecoverySnapshots();
+  }, [stateServerSnapshotsEnabled]);
+
+  useEffect(() => {
     refreshHealthStatus().then((next) => {
       const statusPayload = {
         healthConnectAvailable: next.healthConnectAvailable,
@@ -554,16 +646,27 @@ export default function IntegrationsPage() {
     ensureGoogleIdentityScript().catch((error) => {
       appendSyncDebugLog('IntegrationsPage', 'ensureGoogleIdentityScript preload failed', { error });
     });
+    // Refresh companion session status on mount
+    getCompanionDriveSession().then((session) => {
+      if (session?.active) {
+        appendSyncDebugLog('IntegrationsPage', 'companion session refreshed on mount', {
+          scope: session.scope,
+        });
+      }
+    }).catch(() => {});
   }, [mobileNative, driveConfig.clientId]);
 
   useEffect(() => {
     if (!driveConfig.clientId || !storedToken?.accessToken) return;
-    const scopeReady = tokenHasScopes(storedToken, requiredScopes);
+    const isCompanion = storedToken?.companion;
+    const scopeReady = isCompanion || tokenHasScopes(storedToken, requiredScopes);
     if (!scopeReady) {
       setStatus(`Session Drive presente, mais scopes insuffisants pour ${targetLabel}. Clique "Connecter / verifier Drive".`);
       return;
     }
-    setStatus(`Session Drive prete pour ${targetLabel}. Clique "Rafraichir distant" ou "Pull Drive vers local".`);
+    setStatus(isCompanion
+      ? `Session Drive companion active pour ${targetLabel}. Session geree cote serveur.`
+      : `Session Drive prete pour ${targetLabel}. Clique "Rafraichir distant" ou "Pull Drive vers local".`);
   }, [driveConfig.clientId, requiredScopes, storedToken, targetLabel]);
 
   useEffect(() => {
@@ -582,7 +685,12 @@ export default function IntegrationsPage() {
   }, [state]);
 
   return (
-    <Layout title="Integrations" description="Imports wearable et sync Google Drive">
+    <Layout
+      title="Integrations"
+      description="Imports wearable et sync Google Drive"
+      mobileChromeMode="default"
+      mobileTitleShort="Sync"
+    >
       <main className={styles.page}>
         <div className={styles.container}>
           <section className={styles.hero}>
@@ -595,7 +703,7 @@ export default function IntegrationsPage() {
               <span className={`${styles.stateChip} ${state.healthSync?.lastImportAt ? styles.stateok : styles.statebas}`}>Dernier import {state.healthSync?.lastImportAt || '-'}</span>
               <span className={`${styles.stateChip} ${status ? styles.statebas : styles.stateok}`}>{status || 'Aucune alerte bloquante'}</span>
             </div>
-            <CoreWorkflowNav active="integrations" showSupport />
+            <CoreWorkflowNav active="integrations" supportMode="full" />
           </section>
 
           <section className={styles.grid2}>
@@ -643,13 +751,106 @@ export default function IntegrationsPage() {
                 <button className={styles.button} type="button" disabled={driveBusy || !storedToken?.accessToken} onClick={pushLocalToDrive}>
                   {driveBusy && driveAction === 'push' ? 'Push...' : 'Push local vers Drive'}
                 </button>
-                <button className={styles.buttonGhost} type="button" disabled={driveBusy || !storedToken?.accessToken} onClick={pullDriveToLocal}>
+                <button className={styles.buttonGhost} type="button" disabled={driveBusy || !storedToken?.accessToken || ongoingWorkoutActive} onClick={pullDriveToLocal}>
                   {driveBusy && driveAction === 'pull' ? 'Pull...' : 'Pull Drive vers local'}
                 </button>
               </div>
               <p className={styles.smallMuted} style={{ marginTop: '0.7rem' }}>
                 Autosync: push debounce 10s sur changement local. Pull auto et import sante a l ouverture/reprise quand la session Drive est valide.
               </p>
+              {ongoingWorkoutActive ? (
+                <p className={styles.smallMuted} style={{ color: '#a14a08' }}>
+                  Seance en cours detectee: le pull Drive est bloque tant que le logger ongoing n est pas finalise ou abandonne.
+                </p>
+              ) : null}
+            </article>
+          </section>
+
+          <section>
+            <article className={styles.card}>
+              <h2>Snapshots de secours</h2>
+              <p className={styles.smallMuted}>
+                Avant un pull ou un push Drive, l app cree un snapshot disque via le companion local quand il est disponible. Ces snapshots survivent a un refresh navigateur et a une erreur de sync PC.
+              </p>
+              {!stateServerSnapshotsEnabled ? (
+                <p className={styles.smallMuted}>
+                  Snapshots serveur indisponibles sur ce runtime. Active le state server local pour obtenir des sauvegardes disque versionnees.
+                </p>
+              ) : (
+                <>
+                  <div className={styles.formGrid} style={{ marginTop: '0.8rem' }}>
+                    <button className={styles.button} type="button" disabled={snapshotBusy} onClick={handleCreateSnapshotNow}>
+                      {snapshotBusy ? 'Snapshot...' : 'Creer un snapshot maintenant'}
+                    </button>
+                    <button className={styles.buttonGhost} type="button" disabled={snapshotBusy} onClick={refreshRecoverySnapshots}>
+                      Rafraichir les snapshots
+                    </button>
+                    <button
+                      className={styles.buttonGhost}
+                      type="button"
+                      disabled={snapshotBusy || !recoverySnapshots[0]?.id}
+                      onClick={() => handleRestoreSnapshot(recoverySnapshots[0]?.id)}
+                    >
+                      Restaurer le plus recent
+                    </button>
+                  </div>
+                  <div className={styles.insightGrid} style={{ marginTop: '0.8rem' }}>
+                    <div className={styles.insightItem}>
+                      <div className={styles.insightLabel}>Snapshots disponibles</div>
+                      <div className={styles.insightValue}>{recoverySnapshots.length}</div>
+                    </div>
+                    <div className={styles.insightItem}>
+                      <div className={styles.insightLabel}>Dernier snapshot</div>
+                      <div className={styles.insightValue}>{recoverySnapshots[0]?.createdAt || '-'}</div>
+                    </div>
+                    <div className={styles.insightItem}>
+                      <div className={styles.insightLabel}>Dernier state sauvegarde</div>
+                      <div className={styles.insightValue}>{recoverySnapshots[0]?.stateUpdatedAt || '-'}</div>
+                    </div>
+                    <div className={styles.insightItem}>
+                      <div className={styles.insightLabel}>Raison</div>
+                      <div className={styles.insightValue}>{recoverySnapshots[0]?.reason || '-'}</div>
+                    </div>
+                  </div>
+                  {recoverySnapshots.length ? (
+                    <table className={styles.table} style={{ marginTop: '0.9rem' }}>
+                      <thead>
+                        <tr>
+                          <th>Snapshot</th>
+                          <th>State</th>
+                          <th>Raison</th>
+                          <th>Date active</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {recoverySnapshots.slice(0, 8).map((snapshot) => (
+                          <tr key={snapshot.id}>
+                            <td>{snapshot.createdAt || snapshot.id}</td>
+                            <td>{snapshot.stateUpdatedAt || '-'}</td>
+                            <td>{snapshot.reason || '-'}</td>
+                            <td>{snapshot.selectedDate || '-'}</td>
+                            <td>
+                              <button
+                                className={styles.tinyButton}
+                                type="button"
+                                disabled={snapshotBusy}
+                                onClick={() => handleRestoreSnapshot(snapshot.id)}
+                              >
+                                Restaurer
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className={styles.smallMuted} style={{ marginTop: '0.8rem' }}>
+                      Aucun snapshot disque disponible pour le moment.
+                    </p>
+                  )}
+                </>
+              )}
             </article>
           </section>
 
@@ -730,7 +931,7 @@ export default function IntegrationsPage() {
                 <button className={styles.button} type="button" disabled={driveBusy || !storedToken?.accessToken} onClick={pushLocalToDrive}>
                   {driveBusy && driveAction === 'push' ? 'Push en cours...' : 'Push local vers Drive'}
                 </button>
-                <button className={styles.buttonGhost} type="button" disabled={driveBusy || !storedToken?.accessToken} onClick={pullDriveToLocal}>
+                <button className={styles.buttonGhost} type="button" disabled={driveBusy || !storedToken?.accessToken || ongoingWorkoutActive} onClick={pullDriveToLocal}>
                   {driveBusy && driveAction === 'pull' ? 'Pull en cours...' : 'Pull Drive vers local'}
                 </button>
                 <button className={styles.buttonGhost} type="button" disabled={driveBusy || !storedToken?.accessToken} onClick={disconnectDrive}>
@@ -771,13 +972,16 @@ export default function IntegrationsPage() {
               {status && <p className={styles.smallMuted}>{status}</p>}
             </article>
 
-            <article className={styles.card}>
-              <h2>Payload de sync</h2>
+          </section>
+
+          <section>
+            <details className={`${styles.card} ${styles.detailsCard}`}>
+              <summary className={styles.cardSummary}>Payload de sync</summary>
               <p className={styles.smallMuted}>
                 Enveloppe envoyee a Drive. `stateSnapshots` est retire pour eviter un fichier qui grossit sans fin.
               </p>
               <textarea className={styles.textarea} value={syncPreview} readOnly />
-            </article>
+            </details>
           </section>
 
           <section>
@@ -897,11 +1101,9 @@ export default function IntegrationsPage() {
                 {healthStatus.samsungWeightFallbackReason}
                 {healthStatus.samsungDataSdkRequiresDeveloperMode ? ' Tant que l app n est pas enregistree chez Samsung, active aussi le developer mode Samsung Health.' : ''}
               </p>
-              <div style={{ marginTop: '0.9rem' }}>
-                <div className={styles.sectionHead}>
-                  <h3 style={{ marginBottom: 0 }}>Diagnostic par flux</h3>
-                  <span className={styles.smallMuted}>dernier import + permissions/runtime</span>
-                </div>
+              <details className={`${styles.card} ${styles.detailsCard}`} style={{ marginTop: '0.9rem' }}>
+                <summary className={styles.cardSummary}>Diagnostic par flux</summary>
+                <p className={styles.smallMuted}>Dernier import, permissions, fallback Samsung et couverture par flux.</p>
                 <table className={styles.table}>
                   <thead>
                     <tr>
@@ -924,7 +1126,7 @@ export default function IntegrationsPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </details>
             </article>
 
             <article className={styles.card}>

@@ -1,3 +1,5 @@
+import { sanitizeDebugValue } from './debugSanitizer.js';
+
 export const HEALTH_PROVIDER = {
   healthConnect: 'health-connect',
   samsungHealth: 'samsung-health',
@@ -27,6 +29,8 @@ export const HEALTH_PERMISSION_IDS = {
   samsungOxygen: 'samsung.permission.BLOOD_OXYGEN_READ',
   samsungBloodGlucose: 'samsung.permission.BLOOD_GLUCOSE_READ',
 };
+
+export const KNOWN_HEALTH_PERMISSION_IDS = new Set(Object.values(HEALTH_PERMISSION_IDS));
 
 export const HEALTH_COVERAGE_STATUS = {
   unknown: 'unknown',
@@ -138,6 +142,21 @@ const toIsoDate = (value) => `${value || ''}`.slice(0, 10);
 const positiveNumber = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+};
+
+export const normalizeKnownHealthPermissions = (permissions = []) => {
+  const known = [];
+  const unknown = [];
+  for (const permission of Array.isArray(permissions) ? permissions : []) {
+    const normalized = cleanText(permission);
+    if (!normalized) continue;
+    if (KNOWN_HEALTH_PERMISSION_IDS.has(normalized)) {
+      if (!known.includes(normalized)) known.push(normalized);
+      continue;
+    }
+    if (!unknown.includes(normalized)) unknown.push(normalized);
+  }
+  return { known, unknown };
 };
 
 const buildCoverageEntry = (stream, patch = {}) => ({
@@ -282,10 +301,10 @@ export const formatHealthImportSummary = (summary = {}) => {
 export const classifyHealthErrorCategory = (errorOrMessage = '') => {
   const message = cleanText(errorOrMessage?.message || errorOrMessage).toLowerCase();
   if (!message) return HEALTH_ERROR_CATEGORY.none;
-  if (message.includes('permission')) return HEALTH_ERROR_CATEGORY.permissions;
-  if (message.includes('runtime') || message.includes('sdk') || message.includes('policy')) return HEALTH_ERROR_CATEGORY.runtime;
-  if (message.includes('sync') || message.includes('drive')) return HEALTH_ERROR_CATEGORY.sync;
-  if (message.includes('import')) return HEALTH_ERROR_CATEGORY.import;
+  if (/\bpermission\b/.test(message)) return HEALTH_ERROR_CATEGORY.permissions;
+  if (/\b(runtime|sdk|policy)\b/.test(message)) return HEALTH_ERROR_CATEGORY.runtime;
+  if (/\b(sync|drive)\b/.test(message)) return HEALTH_ERROR_CATEGORY.sync;
+  if (/\bimport\b/.test(message)) return HEALTH_ERROR_CATEGORY.import;
   return HEALTH_ERROR_CATEGORY.unknown;
 };
 
@@ -393,33 +412,11 @@ export const updateHealthSyncError = (
 
 const MAX_HEALTH_DEBUG_ENTRIES = 120;
 
-const sanitizeHealthDebugValue = (value, depth = 0) => {
-  if (depth > 4) return '[max-depth]';
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: value.message,
-      stack: value.stack,
-    };
-  }
-  if (Array.isArray(value)) return value.slice(0, 20).map((item) => sanitizeHealthDebugValue(item, depth + 1));
-  if (typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .slice(0, 30)
-        .map(([key, item]) => [key, sanitizeHealthDebugValue(item, depth + 1)]),
-    );
-  }
-  return `${value}`;
-};
-
 export const buildHealthDebugEntry = (message, payload = null) => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
   at: new Date().toISOString(),
   message: `${message || ''}`,
-  payload: payload ? sanitizeHealthDebugValue(payload) : null,
+  payload: payload ? sanitizeDebugValue(payload) : null,
 });
 
 export const appendHealthDebugEntries = (healthSync = {}, ...entries) => {

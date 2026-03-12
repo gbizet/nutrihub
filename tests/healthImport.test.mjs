@@ -216,3 +216,41 @@ test('health import keeps missing vitals unset instead of coercing them to zero'
   assert.equal(daily.oxygenSaturationPercent, undefined);
   assert.equal(daily.bloodGlucoseMgDl, undefined);
 });
+
+test('health import ignores out-of-range values and records validation warnings', () => {
+  const next = mergeHealthImportIntoState(defaultState, {
+    provider: 'health-connect',
+    importedAt: '2026-03-10T08:15:00.000Z',
+    startDate: '2026-03-10',
+    endDate: '2026-03-10',
+    records: {
+      bodyMetrics: [
+        {
+          date: '2026-03-10',
+          capturedAt: '2026-03-10T07:00:00.000Z',
+          weightKg: -12,
+          bodyFatPercent: 120,
+          sourcePackage: 'com.sec.android.app.shealth',
+        },
+      ],
+      activity: [
+        {
+          date: '2026-03-10',
+          capturedAt: '2026-03-10T22:00:00.000Z',
+          steps: 8123,
+          sourcePackage: 'com.sec.android.app.shealth',
+        },
+      ],
+    },
+  });
+
+  const metric = next.metrics.find((row) => row.date === '2026-03-10');
+  const neat = next.neatLogs.find((row) => row.date === '2026-03-10');
+  const warningEntry = next.healthSync.debugEntries.find((entry) => entry.message === 'health import validation warnings');
+
+  assert.equal(metric, undefined);
+  assert.equal(neat.steps, 8123);
+  assert.equal(warningEntry.payload.warningCount, 2);
+  assert.match(JSON.stringify(warningEntry.payload.warnings), /weightKg/);
+  assert.match(JSON.stringify(warningEntry.payload.warnings), /bodyFatPercent/);
+});

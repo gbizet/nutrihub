@@ -1,8 +1,8 @@
-import { getDayLog, getSessionsForDate, isoWindow } from './domainModel.js';
+import { getDayLog, getSessionsForDate } from './domainModel.js';
 
-const toNum = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+const toNum = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
 };
 
 const sumEntryMacros = (entries = []) =>
@@ -29,51 +29,54 @@ export const dayMacrosForDate = (state, isoDate) => {
   };
 };
 
-export const ketoSignalsForDay = (state, isoDate) => {
-  const keto = state?.keto || {};
+export const nutritionSignalsForDay = (state, isoDate) => {
   const macros = dayMacrosForDate(state, isoDate);
   const dayLog = getDayLog(state, isoDate) || {};
-  const netCarb = Math.max(0, macros.carbs - toNum(keto.fiberGEstimate));
-  const proteinPerLeanKgTarget = toNum(keto.proteinPerLeanKgTarget) || 2.2;
-  const leanMassKg = toNum(keto.leanMassKgEstimate) || 70;
-  const proteinTarget = proteinPerLeanKgTarget * leanMassKg;
-  const carbMax = toNum(keto.netCarbMax) || 35;
-  const sodiumMin = toNum(keto.sodiumMgMin) || 3500;
-  const potassiumMin = toNum(keto.potassiumMgMin) || 3000;
-  const magnesiumMin = toNum(keto.magnesiumMgMin) || 350;
-  const hydrationMin = toNum(keto.hydrationMlMin) || 2500;
-  const restingBpmMax = toNum(keto.restingBpmMax) || 70;
-  const hrvMsMin = toNum(keto.hrvMsMin) || 35;
+  const goals = state?.goals || {};
+  const limits = state?.limits || {};
+  const recoveryBaselines = state?.recoveryBaselines || {};
+
+  const proteinTarget = Math.max(toNum(goals.protein), toNum(limits?.protein?.min));
+  const carbCeiling = Math.max(toNum(goals.carbs), toNum(limits?.carbs?.max));
+  const kcalFloor = toNum(limits?.kcal?.min);
+  const hydrationMin = 2500;
+  const sodiumMin = 3000;
+  const potassiumMin = 3000;
+  const magnesiumMin = 350;
+  const restingBpmMax = Math.max(toNum(recoveryBaselines.restingBpm), 70);
+  const hrvMsMin = Math.max(toNum(recoveryBaselines.hrvMs), 35);
+
+  const hydrationActual = toNum(dayLog?.hydrationMl);
   const sodiumActual = toNum(dayLog?.sodiumMg);
   const potassiumActual = toNum(dayLog?.potassiumMg);
   const magnesiumActual = toNum(dayLog?.magnesiumMg);
-  const hydrationActual = toNum(dayLog?.hydrationMl);
   const restingBpm = toNum(dayLog?.restingBpm);
   const hrvMs = toNum(dayLog?.hrvMs);
 
   return {
     macros,
-    netCarb,
     proteinTarget,
-    carbMax,
-    sodiumMin,
-    potassiumMin,
-    magnesiumMin,
+    carbCeiling,
+    kcalFloor,
     hydrationMin,
-    restingBpmMax,
-    hrvMsMin,
-    sodiumActual,
-    potassiumActual,
-    magnesiumActual,
     hydrationActual,
+    sodiumMin,
+    sodiumActual,
+    potassiumMin,
+    potassiumActual,
+    magnesiumMin,
+    magnesiumActual,
+    restingBpmMax,
     restingBpm,
+    hrvMsMin,
     hrvMs,
-    isNetCarbOk: netCarb <= carbMax,
-    isProteinOk: macros.protein >= proteinTarget,
+    isProteinOk: proteinTarget <= 0 ? true : macros.protein >= proteinTarget,
+    isCarbsOk: carbCeiling <= 0 ? true : macros.carbs <= carbCeiling,
+    isCaloriesOk: kcalFloor <= 0 ? true : macros.kcal >= kcalFloor,
+    isHydrationOk: hydrationActual <= 0 ? true : hydrationActual >= hydrationMin,
     isSodiumOk: sodiumActual <= 0 ? true : sodiumActual >= sodiumMin,
     isPotassiumOk: potassiumActual <= 0 ? true : potassiumActual >= potassiumMin,
     isMagnesiumOk: magnesiumActual <= 0 ? true : magnesiumActual >= magnesiumMin,
-    isHydrationOk: hydrationActual <= 0 ? true : hydrationActual >= hydrationMin,
     isBpmOk: restingBpm <= 0 ? true : restingBpm <= restingBpmMax,
     isHrvOk: hrvMs <= 0 ? true : hrvMs >= hrvMsMin,
   };
@@ -82,35 +85,35 @@ export const ketoSignalsForDay = (state, isoDate) => {
 export const dailyActionPlan = (state, isoDate) => {
   const limits = state?.limits || {};
   const goals = state?.goals || {};
-  const macros = dayMacrosForDate(state, isoDate);
   const dayLog = getDayLog(state, isoDate);
   const sessionsCount = getSessionsForDate(state, isoDate).length;
-  const keto = ketoSignalsForDay(state, isoDate);
+  const signals = nutritionSignalsForDay(state, isoDate);
 
   const actions = [];
-  if (macros.protein < toNum(goals.protein) * 0.8) {
-    actions.push(`Proteines basses (${macros.protein.toFixed(0)}g): ajouter 40-60g proteines au prochain repas.`);
+  if (!signals.isProteinOk) {
+    actions.push(
+      `Proteines basses (${signals.macros.protein.toFixed(0)}g): ajouter 40-60g proteines au prochain repas.`,
+    );
   }
-  if (keto.netCarb > keto.carbMax) {
-    actions.push(`Net carbs hauts (${keto.netCarb.toFixed(0)}g): viser < ${keto.carbMax}g sur le reste de la journee.`);
+  if (!signals.isCarbsOk && signals.carbCeiling > 0) {
+    actions.push(
+      `Glucides hauts (${signals.macros.carbs.toFixed(0)}g): rester sous ${signals.carbCeiling.toFixed(0)}g aujourd hui.`,
+    );
   }
-  if (toNum(macros.kcal) < toNum(limits?.kcal?.min) * 0.85 && toNum(dayLog?.fatigueNervousSystem) >= 7) {
+  if (toNum(signals.macros.kcal) < toNum(limits?.kcal?.min) * 0.85 && toNum(dayLog?.fatigueNervousSystem) >= 7) {
     actions.push('Deficit trop aggressif + fatigue elevee: remonter les kcal ce soir et prevoir seance plus legere demain.');
   }
   if (!sessionsCount) {
     actions.push('Aucune seance loggee: planifier un bloc court 30-40 min (mouvement principal + assistance).');
   }
   if (toNum(dayLog?.sleepHours) > 0 && toNum(dayLog?.sleepHours) < 6.5) {
-    actions.push('Sommeil court: reduire intensite, garder technique/propre, prioriser coucher plus tot.');
+    actions.push('Sommeil court: reduire intensite, garder technique propre et prioriser le coucher.');
   }
-  if (!keto.isSodiumOk) {
-    actions.push(`Sodium bas (${keto.sodiumActual.toFixed(0)}mg): ajouter sodium/electrolytes pour limiter fatigue/crampes.`);
+  if (!signals.isHydrationOk) {
+    actions.push(`Hydratation basse (${signals.hydrationActual.toFixed(0)}ml): atteindre ${signals.hydrationMin.toFixed(0)}ml aujourd hui.`);
   }
-  if (!keto.isPotassiumOk || !keto.isMagnesiumOk) {
-    actions.push('Electrolytes incomplets: renforcer potassium/magnesium (aliments ou supplementation).');
-  }
-  if (!keto.isHydrationOk) {
-    actions.push(`Hydratation basse (${keto.hydrationActual.toFixed(0)}ml): atteindre ${keto.hydrationMin.toFixed(0)}ml aujourd hui.`);
+  if (!signals.isSodiumOk || !signals.isPotassiumOk || !signals.isMagnesiumOk) {
+    actions.push('Electrolytes incomplets: renforcer sodium, potassium et magnesium si tu les logs.');
   }
   if (!actions.length) {
     actions.push('RAS critique: tenir le plan, garder execution propre et constance.');
@@ -119,83 +122,24 @@ export const dailyActionPlan = (state, isoDate) => {
 };
 
 export const readinessScore = (state, isoDate) => {
-  const keto = ketoSignalsForDay(state, isoDate);
+  const signals = nutritionSignalsForDay(state, isoDate);
   const dayLog = getDayLog(state, isoDate);
+
   let score = 100;
-  if (!keto.isNetCarbOk) score -= 18;
-  if (!keto.isProteinOk) score -= 16;
-  if (!keto.isSodiumOk) score -= 10;
-  if (!keto.isPotassiumOk) score -= 8;
-  if (!keto.isMagnesiumOk) score -= 8;
-  if (!keto.isHydrationOk) score -= 10;
-  if (!keto.isBpmOk) score -= 8;
-  if (!keto.isHrvOk) score -= 8;
+  if (!signals.isProteinOk) score -= 16;
+  if (!signals.isCarbsOk) score -= 12;
+  if (!signals.isHydrationOk) score -= 10;
+  if (!signals.isSodiumOk) score -= 6;
+  if (!signals.isPotassiumOk) score -= 5;
+  if (!signals.isMagnesiumOk) score -= 5;
+  if (!signals.isBpmOk) score -= 8;
+  if (!signals.isHrvOk) score -= 8;
+
   const sleep = toNum(dayLog?.sleepHours);
   if (sleep > 0 && sleep < 6.5) score -= 15;
+
   const fatigue = toNum(dayLog?.fatigueNervousSystem);
   if (fatigue >= 7) score -= 20;
+
   return Math.max(0, Math.min(100, score));
-};
-
-export const ketoWeeklyCompliance = (state, selectedDate, days = 14) => {
-  const dates = isoWindow(selectedDate, days);
-  const rows = dates.map((date) => {
-    const signals = ketoSignalsForDay(state, date);
-    const checks = [
-      signals.isNetCarbOk,
-      signals.isProteinOk,
-      signals.isSodiumOk,
-      signals.isPotassiumOk,
-      signals.isMagnesiumOk,
-      signals.isHydrationOk,
-    ];
-    const score = checks.filter(Boolean).length / checks.length;
-    return {
-      date,
-      ...signals,
-      complianceScore: score,
-    };
-  });
-  const avgScore = rows.reduce((acc, row) => acc + row.complianceScore, 0) / (rows.length || 1);
-  return {
-    dates,
-    rows,
-    avgScore,
-    compliantDays: rows.filter((r) => r.complianceScore >= 0.66).length,
-  };
-};
-
-export const nextMealRecommendation = (state, isoDate) => {
-  const keto = ketoSignalsForDay(state, isoDate);
-  if (!keto.isProteinOk) {
-    return 'Prochain repas: focus proteines (40-60g) + legumes faibles glucides + lipides moderes.';
-  }
-  if (!keto.isNetCarbOk) {
-    return 'Prochain repas: zero sucre/feculents, privilegier viande/poisson/oeufs + verts.';
-  }
-  if (!keto.isSodiumOk) {
-    return 'Prochain repas: ajouter sodium (bouillon/electrolytes/salage) pour soutenir energie et perf.';
-  }
-  if (!keto.isPotassiumOk || !keto.isMagnesiumOk) {
-    return 'Prochain repas: prioriser aliments riches en potassium/magnesium et hydratation.';
-  }
-  return 'Prochain repas: maintenir le plan ceto, portion proteinee stable et legumes fibres.';
-};
-
-export const nextWorkoutRecommendation = (state, isoDate) => {
-  const dayLog = getDayLog(state, isoDate);
-  const fatigue = toNum(dayLog?.fatigueNervousSystem);
-  const sleep = toNum(dayLog?.sleepHours);
-  const sessionsCount = getSessionsForDate(state, isoDate).length;
-  if (fatigue >= 7 || (sleep > 0 && sleep < 6.5)) {
-    return 'Seance suivante: reduire volume (-25%), garder mouvement principal technique, pas d echec.';
-  }
-  const keto = ketoSignalsForDay(state, isoDate);
-  if (!keto.isHydrationOk || !keto.isSodiumOk) {
-    return 'Seance suivante: corriger hydratation/electrolytes avant effort intense.';
-  }
-  if (!sessionsCount) {
-    return 'Seance suivante: bloc court 35-45 min, 1 mouvement principal + 2 accessoires.';
-  }
-  return 'Seance suivante: progression standard, viser +1 rep ou +2.5kg sur le top set propre.';
 };

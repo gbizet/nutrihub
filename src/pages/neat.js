@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Layout from '@theme/Layout';
+import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import DateNav from '../components/DateNav';
 import { toPositive, useDashboardState } from '../lib/dashboardStore';
 import { getHealthSnapshotForDate, isActionableHealthActivityRow } from '../lib/healthState.js';
 import InteractiveLineChart from '../components/InteractiveLineChart';
 import CoreWorkflowNav from '../components/CoreWorkflowNav';
+import { toSeriesValue } from '../lib/charts.js';
 
 export default function NeatPage() {
   const { state, setState, uid } = useDashboardState();
@@ -68,7 +69,7 @@ export default function NeatPage() {
               <span className={`${styles.pill} ${styles.pillMuted}`}>Pas: {selectedHealth.steps || '-'}</span>
               <span className={`${styles.pill} ${styles.pillMuted}`}>Calories actives: {selectedHealth.caloriesActive || '-'}</span>
             </div>
-            <CoreWorkflowNav active="neat" showSupport />
+            <CoreWorkflowNav active="neat" supportMode="full" />
           </section>
           <section className={styles.grid2}>
             <article className={styles.card}>
@@ -96,7 +97,7 @@ export default function NeatPage() {
                   id: 'steps',
                   label: 'Pas',
                   color: '#0f172a',
-                  data: recent.map((x) => ({ date: x.date, value: x.steps || 0 })),
+                  data: recent.map((x) => ({ date: x.date, value: toSeriesValue(x.steps, { zeroIsMissing: true }) })),
                 }]}
                 valueFormat={(v) => `${Number(v).toFixed(0)}`}
                 dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
@@ -114,7 +115,7 @@ export default function NeatPage() {
                 id: 'cardio',
                 label: 'Cardio min',
                 color: '#f97316',
-                data: recent.map((x) => ({ date: x.date, value: x.cardioMin || 0 })),
+                data: recent.map((x) => ({ date: x.date, value: toSeriesValue(x.cardioMin, { zeroIsMissing: true }) })),
               }]}
               valueFormat={(v) => `${Number(v).toFixed(0)} min`}
               dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
@@ -131,7 +132,7 @@ export default function NeatPage() {
                 id: 'active-kcal',
                 label: 'Calories actives',
                 color: '#2563eb',
-                data: recent.map((x) => ({ date: x.date, value: x.caloriesActive || 0 })),
+                data: recent.map((x) => ({ date: x.date, value: toSeriesValue(x.caloriesActive, { zeroIsMissing: true }) })),
               }]}
               valueFormat={(v) => `${Number(v).toFixed(0)} kcal`}
               dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}

@@ -226,7 +226,6 @@ export const parseTrainingToSessions = (row, uid) => {
         sets: 1,
         reps: duration,
         load: 0,
-        rir: null,
         notes: training,
         source: 'chat-free-import',
       });
@@ -245,7 +244,6 @@ export const parseTrainingToSessions = (row, uid) => {
         sets: 0,
         reps: 0,
         load: 0,
-        rir: null,
         notes: training,
         source: 'chat-free-import',
       });
@@ -266,7 +264,6 @@ export const parseTrainingToSessions = (row, uid) => {
       sets: isLoadRep ? 1 : toPositive(first, 0),
       reps: toPositive(second, 0),
       load: isLoadRep ? toPositive(first, 0) : 0,
-      rir: null,
       notes: training,
       source: 'chat-free-import',
     });
@@ -291,7 +288,6 @@ export const trainingLogToSessions = (trainingRow, uid) => {
       sets: toPositive(exercise.sets, 0),
       reps: toPositive(exercise.reps, 0),
       load: toPositive(exercise.weight_kg, 0),
-      rir: null,
       notes: `${exercise.notes || ''}`.trim(),
       durationMin: duration,
       source: 'training-log-json',

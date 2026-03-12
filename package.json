@@ -4,10 +4,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "concurrently -k -n APP,STATE \"vite --host 127.0.0.1 --port 3000 --strictPort\" \"node scripts/state-server.mjs\"",
+    "dev": "concurrently -k -n APP,STATE \"vite --mode local-state --host 127.0.0.1 --port 3000 --strictPort\" \"node --input-type=module -e \\\"process.env.STATE_ENABLE='1'; import('./scripts/state-server.mjs');\\\"\"",
     "start": "npm run dev",
-    "start:app": "vite --host 127.0.0.1 --port 3000 --strictPort",
-    "start:state": "node scripts/state-server.mjs",
+    "start:app": "vite --mode local-state --host 127.0.0.1 --port 3000 --strictPort",
+    "start:state": "node --input-type=module -e \"process.env.STATE_ENABLE='1'; import('./scripts/state-server.mjs');\"",
     "build": "vite build",
     "cap:sync": "npx cap sync android",
     "android:sync": "npm run build && npm run cap:sync",

@@ -62,7 +62,19 @@ export const aggregateSessionsByDay = (sessions, days, dailyLogs = [], cycleLogs
 };
 
 export const aggregateWeightByDay = (metrics, days) =>
-  days.map((date) => ({ date, value: metrics.find((m) => m.date === date)?.weight || 0 }));
+  days.map((date) => {
+    const rawWeight = metrics.find((m) => m.date === date)?.weight;
+    const weight = Number(rawWeight);
+    return { date, value: Number.isFinite(weight) && weight > 0 ? weight : null };
+  });
+
+export const toSeriesValue = (value, options = {}) => {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (options.zeroIsMissing && numeric <= 0) return null;
+  return numeric;
+};
 
 export const scaleSeries = (
   series,
@@ -104,8 +116,9 @@ export const svgAreaPath = (points, height, pad) => {
 };
 
 export const pointDelta = (series, accessor = (x) => x.value) => {
-  if (series.length < 2) return 0;
-  const first = accessor(series[0]) || 0;
-  const last = accessor(series[series.length - 1]) || 0;
-  return last - first;
+  const values = series
+    .map((item) => toSeriesValue(accessor(item)))
+    .filter((value) => value !== null);
+  if (values.length < 2) return 0;
+  return values[values.length - 1] - values[0];
 };
