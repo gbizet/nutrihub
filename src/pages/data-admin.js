@@ -4,6 +4,10 @@ import styles from './dashboard.module.css';
 import { useDashboardState } from '../lib/dashboardStore';
 import CoreWorkflowNav from '../components/CoreWorkflowNav';
 import {
+  createLocalDashboardSnapshot,
+  readLocalDashboardSnapshots,
+} from '../lib/dashboardSnapshots.js';
+import {
   parseCompactTextRows,
   parseJsonRows,
   parsePortableCutRows,
@@ -65,11 +69,23 @@ export default function DataAdminPage() {
   const { state, setState, uid } = useDashboardState();
   const [importText, setImportText] = useState('');
   const [status, setStatus] = useState('');
-  const snapshots = useMemo(() => (state.stateSnapshots || []), [state.stateSnapshots]);
+  const [manualSnapshots, setManualSnapshots] = useState(() => readLocalDashboardSnapshots());
+  const snapshots = useMemo(
+    () => [...manualSnapshots, ...(state.stateSnapshots || [])],
+    [manualSnapshots, state.stateSnapshots],
+  );
 
   const restoreSnapshot = (snapshot) => {
     if (!snapshot?.payload) return;
     setState((prev) => ({ ...prev, ...snapshot.payload }));
+  };
+
+  const createSnapshot = () => {
+    const snapshot = createLocalDashboardSnapshot(state, {
+      label: 'manual-data-admin',
+    });
+    setManualSnapshots(readLocalDashboardSnapshots());
+    setStatus(`Snapshot local cree: ${snapshot.id}.`);
   };
 
   const exportState = () => {
@@ -217,10 +233,16 @@ export default function DataAdminPage() {
           <section className={styles.grid2}>
             <article className={styles.card}>
               <h2>Snapshots</h2>
+              <div className={styles.formGrid}>
+                <button className={styles.buttonGhost} type="button" onClick={createSnapshot}>Creer un snapshot local</button>
+              </div>
               <ul className={styles.list}>
                 {snapshots.map((snapshot) => (
                   <li key={snapshot.id}>
-                    <div className={styles.smallMuted}>{snapshot.at} | {snapshot.selectedDate} | {snapshot.size} bytes</div>
+                    <div className={styles.smallMuted}>
+                      {snapshot.at} | {snapshot.selectedDate} | {snapshot.size} bytes
+                      {snapshot.label ? ` | ${snapshot.label}` : ''}
+                    </div>
                     <button className={styles.tinyButton} type="button" onClick={() => restoreSnapshot(snapshot)}>Restaurer</button>
                   </li>
                 ))}

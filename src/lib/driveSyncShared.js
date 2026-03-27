@@ -34,6 +34,7 @@ export const buildSyncEnvelope = (state, options = {}) => {
     ? state
     : (() => {
       const next = { ...state };
+      delete next.selectedDate;
       delete next.stateSnapshots;
       delete next.layouts;
       delete next.dashboards;
@@ -46,7 +47,7 @@ export const buildSyncEnvelope = (state, options = {}) => {
     app: 'nutri-sport-hub',
     updated_at: updatedAt,
     device_id: deviceId,
-    selected_date: sanitizedState?.selectedDate || null,
+    selected_date: null,
     payload: sanitizedState,
   };
 };

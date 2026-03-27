@@ -7,9 +7,20 @@ import {
   persistOngoingWorkoutDraft,
   readOngoingWorkoutDraft,
 } from '../src/lib/ongoingWorkout.js';
+import * as ongoingWorkout from '../src/lib/ongoingWorkout.js';
 
-const setStateMock = vi.fn();
-const setPageUiMock = vi.fn();
+const trainingPageMocks = vi.hoisted(() => ({
+  setStateMock: vi.fn(),
+  replaceStateMock: vi.fn(),
+  persistDashboardStateMock: vi.fn(),
+  setPageUiMock: vi.fn(),
+}));
+const {
+  setStateMock,
+  replaceStateMock,
+  persistDashboardStateMock,
+  setPageUiMock,
+} = trainingPageMocks;
 let uidCounter = 0;
 const DEFAULT_INNER_HEIGHT = window.innerHeight;
 
@@ -82,13 +93,15 @@ vi.mock('../src/app/AppLayout.js', () => ({
 }));
 
 vi.mock('../src/lib/dashboardStore', () => ({
+  persistDashboardState: trainingPageMocks.persistDashboardStateMock,
   toPositive: (value, fallback = 0) => {
     const n = Number.parseFloat(value);
     return Number.isFinite(n) && n >= 0 ? n : fallback;
   },
   useDashboardState: () => ({
     state: baseState,
-    setState: setStateMock,
+    setState: trainingPageMocks.setStateMock,
+    replaceState: trainingPageMocks.replaceStateMock,
     uid: () => {
       uidCounter += 1;
       return `uid-${uidCounter}`;
@@ -107,7 +120,7 @@ vi.mock('../src/lib/localUiState.js', () => ({
     heatmapWeeks: 8,
     heatmapMetric: 'sets',
     mappingExercise: '',
-  }, setPageUiMock]),
+  }, trainingPageMocks.setPageUiMock]),
 }));
 
 vi.mock('../src/components/LayoutBlocks', () => ({
@@ -132,6 +145,9 @@ describe('TrainingPage', () => {
   beforeEach(() => {
     cleanup();
     setStateMock.mockReset();
+    replaceStateMock.mockReset();
+    persistDashboardStateMock.mockReset();
+    persistDashboardStateMock.mockImplementation((state) => state);
     setPageUiMock.mockReset();
     uidCounter = 0;
     baseState.exercises = [];
@@ -246,6 +262,7 @@ describe('TrainingPage', () => {
   it('commits an ongoing workout atomically into ordered session rows when finalized', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-10T10:00:00.000Z'));
+    const clearDraftSpy = vi.spyOn(ongoingWorkout, 'clearOngoingWorkoutDraft');
 
     render(
       React.createElement(
@@ -292,9 +309,11 @@ describe('TrainingPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Cloturer l exercice/i }));
     fireEvent.click(screen.getByRole('button', { name: /Cloturer la seance/i }));
 
-    expect(setStateMock).toHaveBeenCalledTimes(1);
-    const updater = setStateMock.mock.calls[0][0];
-    const next = updater(baseState);
+    expect(persistDashboardStateMock).toHaveBeenCalledTimes(1);
+    expect(replaceStateMock).toHaveBeenCalledTimes(1);
+    expect(clearDraftSpy).toHaveBeenCalledTimes(1);
+    expect(persistDashboardStateMock.mock.invocationCallOrder[0]).toBeLessThan(clearDraftSpy.mock.invocationCallOrder[0]);
+    const next = persistDashboardStateMock.mock.calls[0][0];
 
     expect(next.sessions).toHaveLength(2);
     expect(next.sessions[0].exerciseName).toBe('Landmine Press');
@@ -320,6 +339,32 @@ describe('TrainingPage', () => {
     expect(next.sessions[1].setDetails[0].setNote).toBe('Tempo strict');
 
     expect(readOngoingWorkoutDraft()).toBeNull();
+    clearDraftSpy.mockRestore();
+  });
+
+  it('keeps the ongoing workout draft when the critical persist fails', () => {
+    persistDashboardStateMock.mockReturnValueOnce(null);
+
+    render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(TrainingPage),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Demarrer workout/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Exercice \(libre ou existant\)/i), { target: { value: 'Face Pull' } });
+    fireEvent.click(screen.getByRole('button', { name: /Activer l exercice/i }));
+    fireEvent.change(screen.getByPlaceholderText(/^Reps$/i), { target: { value: '12' } });
+    fireEvent.change(screen.getByPlaceholderText(/Charge kg/i), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter la serie/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Cloturer l exercice/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Cloturer la seance/i }));
+
+    expect(persistDashboardStateMock).toHaveBeenCalledTimes(1);
+    expect(replaceStateMock).not.toHaveBeenCalled();
+    expect(readOngoingWorkoutDraft()).not.toBeNull();
   });
 
   it('auto-fills equipment from the home gym preset catalog when choosing a known exercise', () => {
@@ -490,6 +535,37 @@ describe('TrainingPage', () => {
 
     expect(screen.getByRole('button', { name: /Cloturer l exercice/i })).toBeInTheDocument();
     expect(screen.getAllByText(/set #1/i)).toHaveLength(1);
+    expect(screen.getByText(/0 serie loggee/i)).toBeInTheDocument();
+    expect(screen.getByText(/repos actuel/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Exercice \(libre ou existant\)/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Note set \(optionnel\)/i)).not.toBeInTheDocument();
+  });
+
+  it('shows power logger timing cues in compact mobile capture after logging a set', () => {
+    stubMobileViewport();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-10T10:00:00.000Z'));
+
+    render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(TrainingPage),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Demarrer workout/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Exercice \(libre ou existant\)/i), { target: { value: 'Face Pull' } });
+    fireEvent.click(screen.getByRole('button', { name: /Activer l exercice/i }));
+
+    fireEvent.change(screen.getByPlaceholderText(/^Reps$/i), { target: { value: '12' } });
+    fireEvent.change(screen.getByPlaceholderText(/Charge kg/i), { target: { value: '32.5' } });
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter la serie/i }));
+
+    expect(screen.getByText(/1 serie loggee/i)).toBeInTheDocument();
+    expect(screen.getByText(/Derniere serie:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Heure dernier set:/i)).toBeInTheDocument();
+    expect(screen.getByText(/dernier repos/i)).toBeInTheDocument();
   });
 
   it('reopens the exercise picker without clearing the current selection', () => {
@@ -553,5 +629,48 @@ describe('TrainingPage', () => {
     expect(next.sessions.every((session) => session.workoutLabel === 'Pull lourd')).toBe(true);
     expect(next.sessions.every((session) => session.sessionGroupLabel === 'Pull lourd')).toBe(true);
     expect(next.sessions.every((session) => session.workoutNotes === 'Accent dos epaisseur')).toBe(true);
+  });
+
+  it('edits a finalized set line without flattening the whole exercise', () => {
+    baseState.sessions = [
+      buildManualSession({
+        exerciseName: 'Bench Press',
+        category: 'Push',
+        setDetails: [
+          { setIndex: 1, reps: 1, loadDisplayed: 130, loadEstimated: null, timeLabel: '10:02', setNote: '' },
+          { setIndex: 2, reps: 8, loadDisplayed: 100, loadEstimated: null, timeLabel: '10:05', setNote: 'backoff' },
+        ],
+      }),
+    ];
+
+    render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(TrainingPage),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Editer set #1/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Reps set/i), { target: { value: '2' } });
+    fireEvent.change(screen.getByPlaceholderText(/Charge kg set/i), { target: { value: '127.5' } });
+    fireEvent.change(screen.getByPlaceholderText(/Note set/i), { target: { value: 'top single corrige' } });
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer set/i }));
+
+    expect(setStateMock).toHaveBeenCalledTimes(1);
+    const updater = setStateMock.mock.calls[0][0];
+    const next = updater(baseState);
+
+    expect(next.sessions).toHaveLength(1);
+    expect(next.sessions[0].setDetails).toHaveLength(2);
+    expect(next.sessions[0].setDetails[0].reps).toBe(2);
+    expect(next.sessions[0].setDetails[0].loadDisplayed).toBe(127.5);
+    expect(next.sessions[0].setDetails[0].setNote).toBe('top single corrige');
+    expect(next.sessions[0].setDetails[1].reps).toBe(8);
+    expect(next.sessions[0].setDetails[1].loadDisplayed).toBe(100);
+    expect(next.sessions[0].setDetails[1].setNote).toBe('backoff');
+    expect(next.sessions[0].sets).toBe(2);
+    expect(next.sessions[0].reps).toBe(10);
+    expect(next.sessions[0].load).toBe(127.5);
   });
 });

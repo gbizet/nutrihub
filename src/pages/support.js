@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
 import { useDashboardState } from '../lib/dashboardStore';
+import { readLocalDashboardSnapshots } from '../lib/dashboardSnapshots.js';
 import CoreWorkflowNav from '../components/CoreWorkflowNav';
 
 const cardDefinitions = [
@@ -53,6 +54,7 @@ export default function SupportPage() {
       .filter(Boolean)
       .sort()
       .at(-1);
+    const manualSnapshotCount = readLocalDashboardSnapshots().length;
 
     const statusById = {
       'prompt-builder': state.promptTemplates?.daily || state.promptTemplates?.weekly
@@ -64,14 +66,14 @@ export default function SupportPage() {
       foods: `${state.foods?.length || 0} fiche(s)`,
       neat: lastNeatDate ? `Dernier log ${lastNeatDate}` : 'Aucun log NEAT',
       summary: `Controle sur ${state.selectedDate}`,
-      'data-admin': `${state.stateSnapshots?.length || 0} snapshot(s)`,
+      'data-admin': `${manualSnapshotCount} snapshot(s) manuel(s)`,
     };
 
     return cardDefinitions.map((card) => ({
       ...card,
       status: statusById[card.id] || '-',
     }));
-  }, [state.foods, state.healthSync, state.neatLogs, state.promptTemplates, state.selectedDate, state.stateSnapshots]);
+  }, [state.foods, state.healthSync, state.neatLogs, state.promptTemplates, state.selectedDate]);
 
   return (
     <Layout title="Support" description="Hub secondaire des surfaces support">

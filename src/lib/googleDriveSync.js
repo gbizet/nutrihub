@@ -336,6 +336,7 @@ export const describeDriveSyncTarget = (mode, config = getGoogleDriveConfig()) =
 const stripLocalOnlyState = (state) => {
   if (!state || typeof state !== 'object') return state;
   const next = { ...state };
+  delete next.selectedDate;
   delete next.stateSnapshots;
   delete next.layouts;
   return next;
@@ -350,7 +351,7 @@ export const buildSyncEnvelope = (state, options = {}) => {
     app: 'nutri-sport-hub',
     updated_at: updatedAt,
     device_id: deviceId,
-    selected_date: sanitizedState?.selectedDate || null,
+    selected_date: null,
     payload: sanitizedState,
   };
 };

@@ -1,14 +1,72 @@
 import { defaultHealthSyncState } from './healthSchema.js';
-import { COMMON_EXERCISES } from './exerciseKnowledge.js';
+import { COMMON_EXERCISES, normalizeExerciseMappingKey, resolveCanonicalExerciseName } from './exerciseKnowledge.js';
 
 export const SCHEMA_VERSION = 3;
 export const DASHBOARD_STORAGE_WARN_THRESHOLD_BYTES = 4 * 1024 * 1024;
+export const DASHBOARD_ANDROID_STORAGE_TARGET_BYTES = 400 * 1024;
+export const DASHBOARD_ANDROID_HEALTH_DEBUG_MAX_ENTRIES = 20;
 
 export const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export const uid = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const canonicalExerciseId = (name) => `exercise:${normalizeExerciseMappingKey(name)}`;
+
+const normalizeExerciseLibraryEntry = (exercise = {}, fallbackSource = 'manual') => {
+  const name = resolveCanonicalExerciseName(exercise?.name || exercise?.exerciseName);
+  const key = normalizeExerciseMappingKey(name);
+  if (!key) return null;
+  return {
+    id: `${exercise?.id || ''}`.trim() || canonicalExerciseId(name),
+    name,
+    equipment: `${exercise?.equipment || ''}`.trim(),
+    category: `${exercise?.category || ''}`.trim(),
+    source: `${exercise?.source || fallbackSource || 'manual'}`.trim() || fallbackSource,
+  };
+};
+
+const mergeExerciseLibraryEntries = (existing = {}, next = {}) => ({
+  ...existing,
+  id: existing.id || next.id,
+  name: existing.name || next.name,
+  equipment: existing.equipment || next.equipment,
+  category: existing.category || next.category,
+  source: existing.source || next.source,
+});
+
+const buildCanonicalExerciseLibrary = (
+  rawExercises = [],
+  rawSessions = [],
+  fallbackExercises = COMMON_EXERCISES,
+) => {
+  const map = new Map();
+  const upsert = (candidate, fallbackSource = 'manual') => {
+    const normalized = normalizeExerciseLibraryEntry(candidate, fallbackSource);
+    if (!normalized) return;
+    const key = normalizeExerciseMappingKey(normalized.name);
+    if (!key) return;
+    const existing = map.get(key);
+    map.set(key, existing ? mergeExerciseLibraryEntries(existing, normalized) : normalized);
+  };
+
+  (Array.isArray(rawExercises) ? rawExercises : []).forEach((exercise) => upsert(exercise, exercise?.source || 'manual'));
+  (Array.isArray(rawSessions) ? rawSessions : []).forEach((session) => upsert({
+    id: canonicalExerciseId(session?.exerciseName),
+    name: session?.exerciseName,
+    equipment: session?.equipment,
+    category: session?.category,
+    source: session?.source || 'session',
+  }, session?.source || 'session'));
+  (Array.isArray(fallbackExercises) ? fallbackExercises : []).forEach((exercise) => upsert({
+    id: canonicalExerciseId(exercise?.name),
+    ...exercise,
+    source: exercise?.source || 'preset',
+  }, exercise?.source || 'preset'));
+
+  return Array.from(map.values());
 };
 
 const favoriteFoods = [
@@ -114,10 +172,7 @@ const favoriteFoods = [
   },
 ];
 
-const exerciseLibrary = COMMON_EXERCISES.slice(0, 16).map((exercise) => ({
-  id: uid(),
-  ...exercise,
-}));
+const exerciseLibrary = buildCanonicalExerciseLibrary([], [], COMMON_EXERCISES);
 
 export const defaultState = {
   schemaVersion: SCHEMA_VERSION,
@@ -167,6 +222,25 @@ const normalizeObject = (value, fallback = {}) => (
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
 const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
+const isNativeAndroidRuntime = () => {
+  if (typeof window === 'undefined') return false;
+  const capacitor = window.Capacitor;
+  if (!capacitor || typeof capacitor.getPlatform !== 'function') return false;
+  return capacitor.getPlatform() === 'android';
+};
+
+const trimHotHealthSyncState = (healthSync = {}, { maxDebugEntries = null } = {}) => {
+  const normalized = {
+    ...defaultHealthSyncState,
+    ...(isPlainObject(healthSync) ? healthSync : {}),
+  };
+  if (!Number.isFinite(maxDebugEntries) || maxDebugEntries < 0) return normalized;
+  return {
+    ...normalized,
+    debugEntries: normalizeArray(normalized.debugEntries).slice(0, maxDebugEntries),
+  };
+};
 
 const DASHBOARD_TOP_LEVEL_TYPES = {
   schemaVersion: 'number',
@@ -331,6 +405,10 @@ export const hydratePersistedState = (rawState) => {
   const schemaVersion = Number.isFinite(Number(rawState.schemaVersion))
     ? Number(rawState.schemaVersion)
     : 1;
+  const canonicalExerciseLibrary = buildCanonicalExerciseLibrary(rawState.exercises, rawState.sessions, COMMON_EXERCISES);
+  const canonicalExerciseLibraryByKey = new Map(
+    canonicalExerciseLibrary.map((exercise) => [normalizeExerciseMappingKey(exercise.name), exercise]),
+  );
   const normalizedSessions = Array.isArray(rawState.sessions)
     ? rawState.sessions.map((session) => {
       const setDetails = Array.isArray(session?.setDetails)
@@ -373,8 +451,15 @@ export const hydratePersistedState = (rawState) => {
         || `${session?.date || 'undated'}::${session?.sessionTitle || session?.sessionGroupLabel || session?.exerciseName || session?.id || 'workout'}`.trim();
       const workoutLabel =
         `${session?.workoutLabel || session?.sessionGroupLabel || session?.sessionTitle || session?.date || 'Seance'}`.trim();
+      const canonicalName = resolveCanonicalExerciseName(session?.exerciseName);
+      const canonicalKey = normalizeExerciseMappingKey(canonicalName);
+      const linkedExercise = canonicalExerciseLibraryByKey.get(canonicalKey) || null;
       return {
         ...session,
+        exerciseId: linkedExercise?.id || `${session?.exerciseId || ''}`.trim() || (canonicalKey ? canonicalExerciseId(canonicalName) : ''),
+        exerciseName: canonicalName || `${session?.exerciseName || ''}`.trim(),
+        equipment: linkedExercise?.equipment || `${session?.equipment || ''}`.trim(),
+        category: linkedExercise?.category || `${session?.category || ''}`.trim(),
         workoutId,
         workoutLabel,
         exerciseOrder: Number.parseInt(session?.exerciseOrder, 10) || undefined,
@@ -391,6 +476,7 @@ export const hydratePersistedState = (rawState) => {
     updatedAt: rawState.updatedAt || rawState.stateSnapshots?.[0]?.at || new Date().toISOString(),
     deletedFoodKeys,
     foods: hydrateFoods(rawState.foods, deletedFoodKeys),
+    exercises: canonicalExerciseLibrary,
     exerciseMuscleOverrides: normalizeObject(rawState.exerciseMuscleOverrides),
     sessions: normalizedSessions,
     cycles: normalizeArray(rawState.cycles),
@@ -419,10 +505,18 @@ export const mergeIncomingStatePreservingLocalSession = (previousState, incoming
     dashboards: _legacyDashboards,
     ...sanitizedNext
   } = next;
+  const preserveLocalSessions = (
+    `${previous?.updatedAt || ''}` > `${next?.updatedAt || ''}`
+    && Array.isArray(previous.sessions)
+    && previous.sessions.length > 0
+  );
   return {
     ...sanitizedNext,
     selectedDate: previous.selectedDate || next.selectedDate || defaultState.selectedDate,
     layouts: normalizeObject(previous.layouts, next.layouts || defaultState.layouts),
+    sessions: preserveLocalSessions && Array.isArray(previous.sessions)
+      ? previous.sessions
+      : (Array.isArray(sanitizedNext.sessions) ? sanitizedNext.sessions : []),
     stateSnapshots: Array.isArray(previous.stateSnapshots) ? previous.stateSnapshots : (next.stateSnapshots || []),
   };
 };
@@ -441,39 +535,33 @@ export const hydrateStateFromSyncEnvelope = (envelope) => {
 export const preparePersistedDashboardState = (
   state,
   {
-    thresholdBytes = DASHBOARD_STORAGE_WARN_THRESHOLD_BYTES,
-    maxSnapshots = 20,
+    thresholdBytes = isNativeAndroidRuntime()
+      ? DASHBOARD_ANDROID_STORAGE_TARGET_BYTES
+      : DASHBOARD_STORAGE_WARN_THRESHOLD_BYTES,
   } = {},
 ) => {
-  const snapshotless = { ...state, stateSnapshots: undefined };
-  const snapshot = {
-    id: `${Date.now()}`,
-    at: state.updatedAt || new Date().toISOString(),
-    selectedDate: state.selectedDate,
-    size: JSON.stringify(snapshotless).length,
-    payload: snapshotless,
-  };
-
-  const requestedSnapshots = [snapshot, ...(state.stateSnapshots || [])].slice(0, maxSnapshots);
-  let persistedState = {
+  const androidHotState = isNativeAndroidRuntime();
+  const baseState = {
     ...state,
-    stateSnapshots: requestedSnapshots,
+    healthSync: trimHotHealthSyncState(
+      state?.healthSync,
+      {
+        maxDebugEntries: androidHotState ? DASHBOARD_ANDROID_HEALTH_DEBUG_MAX_ENTRIES : null,
+      },
+    ),
   };
-  let serialized = JSON.stringify(persistedState);
-
-  while (serialized.length > thresholdBytes && persistedState.stateSnapshots.length > 0) {
-    persistedState = {
-      ...persistedState,
-      stateSnapshots: persistedState.stateSnapshots.slice(0, -1),
-    };
-    serialized = JSON.stringify(persistedState);
-  }
+  const persistedState = {
+    ...baseState,
+    // Hot-state persistence stays snapshotless on every platform now.
+    stateSnapshots: [],
+  };
+  const serialized = JSON.stringify(persistedState);
 
   return {
     persistedState,
     sizeBytes: serialized.length,
     thresholdBytes,
-    trimmedSnapshotCount: requestedSnapshots.length - persistedState.stateSnapshots.length,
+    trimmedSnapshotCount: 0,
     warning:
       serialized.length > thresholdBytes
         ? {

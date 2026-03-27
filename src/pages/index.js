@@ -12,9 +12,16 @@ import {
   toSeriesValue,
 } from '../lib/charts';
 import { dailyActionPlan, readinessScore } from '../lib/coachEngine';
-import { countLoggedMeals, getSessionsForDate, getWorkoutsForDate } from '../lib/domainModel';
+import {
+  countLoggedMeals,
+  getSessionsForDate,
+  getWorkoutsForDate,
+  parseIsoDate,
+  toIsoDate,
+} from '../lib/domainModel';
 import { rankWorkedMuscleGroups } from '../lib/exerciseKnowledge.js';
 import { getHealthSnapshotForDate, getHealthSnapshotsForDates } from '../lib/healthState.js';
+import { useLocalPageUiState } from '../lib/localUiState.js';
 import { METRICS, clampPercent, formatMetric } from '../lib/nutritionAnalytics.js';
 import InteractiveLineChart from '../components/InteractiveLineChart';
 import CoreWorkflowNav from '../components/CoreWorkflowNav';
@@ -23,9 +30,52 @@ import DateNav from '../components/DateNav';
 const formatDelta = (value, unit = '') => `${value >= 0 ? '+' : ''}${value.toFixed(1)}${unit}`;
 const formatMuscleFocus = (rows) => rows.map((row) => row.label).join(' / ');
 const todayIso = () => new Date().toISOString().slice(0, 10);
+const HOME_TREND_OPTIONS = [
+  { value: '7', label: '7j' },
+  { value: '14', label: '14j' },
+  { value: '28', label: '28j' },
+  { value: '90', label: '90j' },
+  { value: '365', label: '1a' },
+  { value: 'all', label: 'Tout' },
+];
+const HOME_TREND_LABELS = Object.fromEntries(HOME_TREND_OPTIONS.map((option) => [option.value, option.label]));
+
+const buildIsoRange = (startIso, endIso) => {
+  const start = parseIsoDate(startIso);
+  const end = parseIsoDate(endIso);
+  const days = [];
+  for (let current = new Date(start); current <= end; current.setDate(current.getDate() + 1)) {
+    days.push(toIsoDate(current));
+  }
+  return days;
+};
+
+const resolveHomeTrendDays = (state, selectedDate, trendRange) => {
+  const safeSelectedDate = `${selectedDate || todayIso()}`.trim() || todayIso();
+  if (trendRange !== 'all') {
+    const length = Number.parseInt(trendRange, 10);
+    return isoDaysWindow(safeSelectedDate, Number.isFinite(length) && length > 0 ? length : 14);
+  }
+
+  const earliestDate = [
+    ...(state.metrics || []).map((row) => row?.date),
+    ...(state.entries || []).map((row) => row?.date),
+    ...(state.dailyLogs || []).map((row) => row?.date),
+    ...(state.neatLogs || []).map((row) => row?.date),
+    ...(state.sessions || []).map((row) => row?.date),
+    ...(state.cycleLogs || []).map((row) => row?.date),
+  ]
+    .filter((date) => date && date <= safeSelectedDate)
+    .sort((a, b) => a.localeCompare(b))[0];
+
+  return earliestDate
+    ? buildIsoRange(earliestDate, safeSelectedDate)
+    : isoDaysWindow(safeSelectedDate, 14);
+};
 
 export default function HomePage() {
   const { state, setState, entriesForSelectedDay, metricsForSelectedDay, dayMacros } = useDashboardState();
+  const [pageUi, setPageUi] = useLocalPageUiState('home', { trendRange: '14' });
   const loggedMealsForSelectedDay = useMemo(
     () => countLoggedMeals(entriesForSelectedDay),
     [entriesForSelectedDay],
@@ -67,8 +117,12 @@ export default function HomePage() {
     },
     [state.limits],
   );
-
-  const days = useMemo(() => isoDaysWindow(state.selectedDate, 7), [state.selectedDate]);
+  const trendRange = HOME_TREND_LABELS[pageUi.trendRange] ? pageUi.trendRange : '14';
+  const trendRangeLabel = HOME_TREND_LABELS[trendRange] || '14j';
+  const days = useMemo(
+    () => resolveHomeTrendDays(state, state.selectedDate, trendRange),
+    [state, state.selectedDate, trendRange],
+  );
 
   const weightSeries = useMemo(() => aggregateWeightByDay(state.metrics, days), [days, state.metrics]);
   const healthWindow = useMemo(
@@ -153,7 +207,7 @@ export default function HomePage() {
     {
       label: 'Poids',
       value: metricsForSelectedDay?.weight ? `${Number(metricsForSelectedDay.weight).toFixed(1)} kg` : '-',
-      meta: `Kcal 7j ${weeklyCalories.toFixed(0)}`,
+      meta: `Kcal ${trendRangeLabel} ${weeklyCalories.toFixed(0)}`,
     },
     {
       label: 'Training',
@@ -176,6 +230,7 @@ export default function HomePage() {
     trainingDurationForSelectedDay,
     trainingFocusLabel,
     trainingSetsForSelectedDay,
+    trendRangeLabel,
     weeklyCalories,
     workoutsForSelectedDay.length,
   ]);
@@ -207,7 +262,7 @@ export default function HomePage() {
       title: 'Poids',
       eyebrow: 'Thermometre principal',
       value: metricsForSelectedDay?.weight ? `${Number(metricsForSelectedDay.weight).toFixed(1)} kg` : '-',
-      meta: `Delta 7j ${formatDelta(weightDelta, ' kg')}`,
+      meta: `Delta ${trendRangeLabel} ${formatDelta(weightDelta, ' kg')}`,
     },
     {
       to: '/nutrition',
@@ -332,51 +387,66 @@ export default function HomePage() {
           </section>
 
           <section className={styles.grid3}>
+            <div className={styles.chartRangeToolbar}>
+              <div>
+                <h2 style={{ marginBottom: 0 }}>Tendances accueil</h2>
+                <div className={styles.smallMuted}>Fenetre {trendRangeLabel} jusqu au {state.selectedDate}</div>
+              </div>
+              <div className={styles.chartRangeChips} role="group" aria-label="Fenetre des graphes accueil">
+                {HOME_TREND_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    className={`${styles.chartRangeChip} ${trendRange === option.value ? styles.chartRangeChipActive : ''}`}
+                    type="button"
+                    onClick={() => setPageUi((prev) => ({ ...prev, trendRange: option.value }))}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <article className={styles.card}>
               <div className={styles.sectionHead}>
-                <h2 style={{ marginBottom: 0 }}>Poids 7j</h2>
+                <h2 style={{ marginBottom: 0 }}>Poids {trendRangeLabel}</h2>
                 <span className={styles.smallMuted}>{formatDelta(weightDelta, ' kg')}</span>
               </div>
               <InteractiveLineChart
-                ariaLabel="Poids 7 jours interactif"
+                ariaLabel={`Poids ${trendRangeLabel} interactif`}
                 xLabel="Date"
                 yLabel="kg"
                 series={[{ id: 'weight', label: 'Poids', color: '#0f172a', data: weightSeries }]}
                 valueFormat={(v) => `${Number(v).toFixed(1)}kg`}
                 dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
               />
             </article>
 
             <article className={styles.card}>
               <div className={styles.sectionHead}>
-                <h2 style={{ marginBottom: 0 }}>Kcal 7j</h2>
+                <h2 style={{ marginBottom: 0 }}>Kcal {trendRangeLabel}</h2>
                 <span className={styles.smallMuted}>{formatDelta(kcalDelta, ' kcal')}</span>
               </div>
               <InteractiveLineChart
-                ariaLabel="Calories 7 jours interactif"
+                ariaLabel={`Calories ${trendRangeLabel} interactif`}
                 xLabel="Date"
                 yLabel="kcal"
                 series={[{ id: 'kcal', label: 'Kcal', color: '#f97316', data: kcalSeries }]}
                 valueFormat={(v) => `${Number(v).toFixed(0)}`}
                 dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
               />
             </article>
 
             <article className={styles.card}>
               <div className={styles.sectionHead}>
-                <h2 style={{ marginBottom: 0 }}>Training 7j</h2>
+                <h2 style={{ marginBottom: 0 }}>Training {trendRangeLabel}</h2>
                 <span className={styles.smallMuted}>{formatDelta(sessionsDelta, '')}</span>
               </div>
               <InteractiveLineChart
-                ariaLabel="Workouts 7 jours interactif"
+                ariaLabel={`Workouts ${trendRangeLabel} interactif`}
                 xLabel="Date"
                 yLabel="Nb workouts"
                 series={[{ id: 'sessions', label: 'Workouts training', color: '#16a34a', data: sessionsSeries }]}
                 valueFormat={(v) => `${Number(v).toFixed(0)}`}
                 dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
               />
             </article>
           </section>
@@ -387,43 +457,41 @@ export default function HomePage() {
               <div className={styles.grid2}>
                 <article className={styles.card}>
                   <div className={styles.sectionHead}>
-                    <h2 style={{ marginBottom: 0 }}>Sommeil 7j</h2>
+                    <h2 style={{ marginBottom: 0 }}>Sommeil {trendRangeLabel}</h2>
                     <span className={styles.smallMuted}>bridge sante commun</span>
                   </div>
                   <InteractiveLineChart
-                    ariaLabel="Sommeil 7 jours interactif"
+                    ariaLabel={`Sommeil ${trendRangeLabel} interactif`}
                     xLabel="Date"
                     yLabel="heures"
                     series={[{ id: 'sleep', label: 'Sommeil', color: '#0f172a', data: sleepSeries }]}
                     valueFormat={(v) => `${Number(v).toFixed(1)} h`}
                     dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                    onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
                   />
                 </article>
 
                 <article className={styles.card}>
                   <div className={styles.sectionHead}>
-                    <h2 style={{ marginBottom: 0 }}>Pas 7j</h2>
+                    <h2 style={{ marginBottom: 0 }}>Pas {trendRangeLabel}</h2>
                     <span className={styles.smallMuted}>NEAT / activite</span>
                   </div>
                   <InteractiveLineChart
-                    ariaLabel="Pas 7 jours interactif"
+                    ariaLabel={`Pas ${trendRangeLabel} interactif`}
                     xLabel="Date"
                     yLabel="pas"
                     series={[{ id: 'steps', label: 'Pas', color: '#2563eb', data: stepsSeries }]}
                     valueFormat={(v) => `${Number(v).toFixed(0)}`}
                     dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                    onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
                   />
                 </article>
 
                 <article className={styles.card}>
                   <div className={styles.sectionHead}>
-                    <h2 style={{ marginBottom: 0 }}>Tension 7j</h2>
+                    <h2 style={{ marginBottom: 0 }}>Tension {trendRangeLabel}</h2>
                     <span className={styles.smallMuted}>systolique / diastolique</span>
                   </div>
                   <InteractiveLineChart
-                    ariaLabel="Tension arterielle 7 jours interactif"
+                    ariaLabel={`Tension arterielle ${trendRangeLabel} interactif`}
                     xLabel="Date"
                     yLabel="mmHg"
                     series={[
@@ -432,7 +500,6 @@ export default function HomePage() {
                     ]}
                     valueFormat={(v) => `${Number(v).toFixed(0)}`}
                     dateFormat={(d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`}
-                    onDateClick={(date) => setState((prev) => ({ ...prev, selectedDate: date }))}
                   />
                 </article>
               </div>

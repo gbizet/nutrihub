@@ -7,6 +7,42 @@ const normalize = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const EXERCISE_CANONICAL_GROUPS = [
+  { canonical: 'Bench Press', aliases: ['Bench Press', 'Developpe couche', 'Dev couche', 'Developpe couche barre'] },
+  { canonical: 'Incline Bench Press', aliases: ['Incline Bench Press', 'Developpe incline', 'Dev incline'] },
+  { canonical: 'Overhead Press', aliases: ['Overhead Press', 'Developpe militaire', 'dev militaire'] },
+  { canonical: 'EZ Bar Curl', aliases: ['EZ Bar Curl', 'Curl barre EZ', 'curl barre ez'] },
+  { canonical: 'Cable Fly', aliases: ['Cable Fly', 'Ecarte poulie haute'] },
+  { canonical: 'Triceps Extension (Poulie)', aliases: ['Triceps Extension (Poulie)', 'Triceps Poulie', 'extension triceps a la poulie haute', 'extension triceps à la poulie haute'] },
+  { canonical: 'shrug', aliases: ['shrug', 'Shrug halteres', 'Dumbbell Shrug'] },
+  { canonical: 'Traction pdc', aliases: ['Traction pdc', 'Pull-Up', 'Pull Up'] },
+  { canonical: 'Tirage row banc haltere mono bras', aliases: ['Tirage row banc haltere mono bras', 'Rowing haltere un bras', 'One Arm Dumbbell Row'] },
+  { canonical: 'Elevation laterale', aliases: ['Elevation laterale', 'Élévation latteral', 'Lateral Raise', 'Elevations laterales', 'Elevation laterale halteres'] },
+];
+
+const EXERCISE_CANONICAL_LOOKUP = new Map();
+
+for (const group of EXERCISE_CANONICAL_GROUPS) {
+  const canonicalKey = normalize(group.canonical);
+  if (!canonicalKey) continue;
+  EXERCISE_CANONICAL_LOOKUP.set(canonicalKey, group.canonical);
+  for (const alias of group.aliases || []) {
+    const aliasKey = normalize(alias);
+    if (!aliasKey) continue;
+    EXERCISE_CANONICAL_LOOKUP.set(aliasKey, group.canonical);
+  }
+}
+
+export const resolveCanonicalExerciseName = (exerciseName = '') => {
+  const raw = `${exerciseName || ''}`.trim();
+  if (!raw) return '';
+  return EXERCISE_CANONICAL_LOOKUP.get(normalize(raw)) || raw;
+};
+
+export const areExerciseNamesEquivalent = (left, right) => (
+  normalizeExerciseMappingKey(left) === normalizeExerciseMappingKey(right)
+);
+
 const GENERIC_HEADERS = [
   'serie',
   'series',
@@ -130,7 +166,22 @@ export const isMeaningfulExerciseName = (name) => {
   return true;
 };
 
-export const normalizeExerciseMappingKey = (name = '') => normalize(name);
+export const normalizeExerciseMappingKey = (name = '') => normalize(resolveCanonicalExerciseName(name));
+
+export const buildCanonicalExerciseLibrary = (exercises = COMMON_EXERCISES) => {
+  const seen = new Set();
+  return (Array.isArray(exercises) ? exercises : [])
+    .map((exercise) => ({
+      ...exercise,
+      name: resolveCanonicalExerciseName(exercise?.name),
+    }))
+    .filter((exercise) => {
+      const key = normalizeExerciseMappingKey(exercise.name);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
 
 export const findCommonExerciseByName = (exerciseName = '') => {
   const key = normalizeExerciseMappingKey(exerciseName);
@@ -148,7 +199,7 @@ export const normalizeMuscleGroupShares = (candidate = {}) => {
 };
 
 export const resolveMuscleGroupShares = (exerciseName, category = '') => {
-  const haystack = `${normalize(exerciseName)} ${normalize(category)}`.trim();
+  const haystack = `${normalize(resolveCanonicalExerciseName(exerciseName))} ${normalize(category)}`.trim();
   const shares = {};
   const bump = (group, value) => {
     shares[group] = (shares[group] || 0) + value;

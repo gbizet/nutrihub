@@ -475,6 +475,41 @@
   gap: 0.55rem;
 }
 
+.chartRangeToolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chartRangeChips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.chartRangeChip {
+  border: 1px solid rgba(188, 200, 212, 0.95);
+  border-radius: 10px;
+  background: #fffdf9;
+  color: var(--ink-strong);
+  min-height: 34px;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 12px 20px -22px rgba(15, 23, 42, 0.34);
+}
+
+.chartRangeChipActive {
+  border-color: var(--route-accent-border);
+  background: var(--route-accent-soft);
+  color: var(--route-accent-strong);
+}
+
 .summaryMetric {
   display: grid;
   gap: 0.18rem;
@@ -1165,8 +1200,16 @@
   scroll-margin-top: calc(var(--app-chrome-height, 60px) + var(--training-gym-bar-height, 0px) + 0.2rem);
 }
 
+.trainingCaptureShell {
+  /* capture section wrapper */
+}
+
 .trainingExerciseCard {
   /* target active exercise logger card */
+}
+
+.trainingExerciseCardActive {
+  /* active logger variant for compact capture */
 }
 
 .trainingSetFormAnchor {
@@ -1385,6 +1428,33 @@
   gap: 0.22rem;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.trainingSetStatGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.trainingSetStat {
+  display: grid;
+  gap: 0.08rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid rgba(188, 200, 212, 0.86);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.trainingSetStat strong {
+  color: var(--ink-strong);
+  font-size: 0.92rem;
+  line-height: 1;
+}
+
+.trainingSetStat span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.15;
 }
 
 .trainingSetSummaryBadge {
@@ -1803,6 +1873,21 @@
     gap: 0.45rem;
   }
 
+  .chartRangeToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chartRangeChips {
+    justify-content: flex-start;
+  }
+
+  .chartRangeChip {
+    min-height: 32px;
+    padding: 0.28rem 0.62rem;
+    font-size: 0.76rem;
+  }
+
   .summaryMetric {
     padding: 0.62rem 0.68rem;
     background: linear-gradient(180deg, #fffdf9, #f5f7fb);
@@ -2022,8 +2107,12 @@
     display: none;
   }
 
+  .setKeyboardMode .trainingWorkoutCard {
+    display: none !important;
+  }
+
   .setKeyboardMode .trainingExerciseCard {
-    padding-top: 0.75rem;
+    padding-top: 0.58rem;
   }
 
   .setKeyboardMode .trainingSetComposer {
@@ -2031,7 +2120,9 @@
     top: calc(var(--training-gym-bar-height, 0px) + 0.25rem);
     z-index: 3;
     margin-top: 0.15rem;
-    padding: 0.72rem 0.72rem 4.3rem;
+    display: grid;
+    gap: 0.55rem;
+    padding: 0.72rem 0.72rem calc(var(--training-action-rail-height, var(--mobile-actionbar-height, 86px)) + 0.9rem);
     border: 1px solid rgba(188, 200, 212, 0.96);
     border-radius: 14px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(255, 248, 241, 0.99));
@@ -2041,6 +2132,50 @@
   .setKeyboardMode .trainingSetFormAnchor {
     grid-template-columns: 1fr 1fr;
     gap: 0.5rem;
+  }
+
+  .setKeyboardMode .trainingSetSummaryCompact {
+    margin-bottom: 0;
+    padding: 0 0 0.2rem;
+  }
+
+  .setKeyboardMode .trainingSetSummaryCompact .trainingSetSummaryTop {
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .setKeyboardMode .trainingSetSummaryCompact .trainingSetSummaryTop strong {
+    font-size: 0.96rem;
+  }
+
+  .setKeyboardMode .trainingSetSummaryCompact .trainingSetSummaryTop span {
+    font-size: 0.76rem;
+  }
+
+  .setKeyboardMode .trainingSetSummaryCompact .trainingSetSummaryBadge,
+  .setKeyboardMode .trainingSetSummaryCompact .stateChip {
+    padding: 0.22rem 0.5rem;
+    font-size: 0.74rem;
+  }
+
+  .setKeyboardMode .trainingSetCompactMeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.05rem;
+  }
+
+  .setKeyboardMode .trainingSetCompactMeta span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0.22rem 0.48rem;
+    border-radius: 999px;
+    background: rgba(241, 245, 249, 0.92);
+    border: 1px solid rgba(188, 200, 212, 0.88);
+    color: var(--ink-strong);
+    font-size: 0.73rem;
+    line-height: 1.1;
   }
 
   .setKeyboardMode .trainingPrimaryButton {
@@ -2128,7 +2263,14 @@
 
   .gymMode .trainingCaptureStack {
     padding-top: 0;
-    padding-bottom: calc(var(--mobile-actionbar-height, 86px) + var(--visual-keyboard-inset, 0px) + 0.7rem);
+    padding-bottom: calc(var(--training-action-rail-height, var(--mobile-actionbar-height, 86px)) + var(--visual-keyboard-inset, 0px) + 0.7rem);
+  }
+
+  .gymMode .trainingCaptureShell {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .gymMode .trainingCaptureCard {
@@ -2138,6 +2280,13 @@
   .gymMode .trainingExerciseCard {
     padding: 0.82rem;
     box-shadow: 0 18px 32px -28px rgba(15, 23, 42, 0.46);
+  }
+
+  .gymMode .trainingExerciseCardActive {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .gymMode .trainingSetSummary {
@@ -2184,13 +2333,6 @@
     min-height: 44px;
   }
 
-  .gymMode .trainingInlineActionGrid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem;
-    margin-top: 0.6rem;
-  }
-
   .setKeyboardMode .captureActionRail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     bottom: calc(var(--visual-keyboard-inset, 0px) + max(0.35rem, env(safe-area-inset-bottom)));
@@ -2205,19 +2347,8 @@
     display: inline-flex;
   }
 
-  .setKeyboardMode .trainingInlineActionGrid {
-    display: grid;
+  .setKeyboardMode .trainingSetStatGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    position: fixed;
-    left: 0.6rem;
-    right: 0.6rem;
-    bottom: max(0.35rem, env(safe-area-inset-bottom));
-    z-index: 19;
-    padding: 0.45rem;
-    border: 1px solid rgba(188, 200, 212, 0.96);
-    border-radius: 14px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(255, 248, 241, 0.99));
-    box-shadow: 0 18px 28px -24px rgba(15, 23, 42, 0.68);
   }
 
   .workflowGrid {

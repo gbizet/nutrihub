@@ -1,3 +1,5 @@
+import { resolveCanonicalExerciseName } from './exerciseKnowledge.js';
+
 const normalizeSpaces = (value) => `${value || ''}`.replace(/\s+/g, ' ').trim();
 const stripDiacritics = (value) => `${value || ''}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
@@ -220,7 +222,7 @@ export const parseTrainingToSessions = (row, uid) => {
         id: uid(),
         date: row.date,
         exerciseId: `chat-${uid()}`,
-        exerciseName: 'Marche',
+        exerciseName: resolveCanonicalExerciseName('Marche'),
         equipment: 'Imported',
         category: 'Cardio',
         sets: 1,
@@ -238,7 +240,7 @@ export const parseTrainingToSessions = (row, uid) => {
         id: uid(),
         date: row.date,
         exerciseId: `chat-${uid()}`,
-        exerciseName: chunk,
+        exerciseName: resolveCanonicalExerciseName(chunk),
         equipment: 'Imported',
         category: 'Imported',
         sets: 0,
@@ -258,7 +260,7 @@ export const parseTrainingToSessions = (row, uid) => {
       id: uid(),
       date: row.date,
       exerciseId: `chat-${uid()}`,
-      exerciseName: name,
+      exerciseName: resolveCanonicalExerciseName(name),
       equipment: 'Imported',
       category: 'Imported',
       sets: isLoadRep ? 1 : toPositive(first, 0),
@@ -282,7 +284,7 @@ export const trainingLogToSessions = (trainingRow, uid) => {
       id: uid(),
       date,
       exerciseId: `json-${uid()}`,
-      exerciseName: `${exercise.name}`.trim(),
+      exerciseName: resolveCanonicalExerciseName(`${exercise.name}`.trim()),
       equipment: 'Imported',
       category: 'Imported',
       sets: toPositive(exercise.sets, 0),

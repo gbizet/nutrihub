@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  areExerciseNamesEquivalent,
+  buildCanonicalExerciseLibrary,
   findCommonExerciseByName,
   resolveMuscleGroup,
   resolveMuscleGroupShares,
   resolveMuscleGroupSharesWithOverrides,
   isMeaningfulExerciseName,
   normalizeExerciseMappingKey,
+  resolveCanonicalExerciseName,
   rankWorkedMuscleGroups,
 } from '../src/lib/exerciseKnowledge.js';
 
@@ -58,4 +61,22 @@ test('common home gym presets expose the expected equipment defaults', () => {
   assert.equal(findCommonExerciseByName('Face Pull')?.equipment, 'Poulies vis-a-vis');
   assert.equal(findCommonExerciseByName('Tirage vertical poulie double')?.equipment, 'Poulie double');
   assert.equal(findCommonExerciseByName('Developpe couche')?.equipment, 'Banc + barre olympique + disques');
+});
+
+test('obvious exercise aliases collapse to the same canonical name', () => {
+  assert.equal(resolveCanonicalExerciseName('curl barre ez'), 'EZ Bar Curl');
+  assert.equal(resolveCanonicalExerciseName('dev militaire'), 'Overhead Press');
+  assert.equal(areExerciseNamesEquivalent('curl barre ez', 'EZ Bar Curl'), true);
+  assert.equal(areExerciseNamesEquivalent('Developpe couche', 'Bench Press'), true);
+});
+
+test('canonical exercise library keeps only one entry per equivalent exercise', () => {
+  const library = buildCanonicalExerciseLibrary([
+    { name: 'EZ Bar Curl', equipment: 'EZ Bar', category: 'Arms' },
+    { name: 'curl barre ez', equipment: 'EZ Bar', category: 'Arms' },
+    { name: 'dev militaire', equipment: 'Barre olympique', category: 'Shoulders' },
+    { name: 'Overhead Press', equipment: 'Barre olympique', category: 'Shoulders' },
+  ]);
+
+  assert.deepEqual(library.map((exercise) => exercise.name), ['EZ Bar Curl', 'Overhead Press']);
 });

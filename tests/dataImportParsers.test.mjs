@@ -29,7 +29,7 @@ test('free training parser detects cardio duration and load x reps blocks', () =
   const sessions = parseTrainingToSessions(
     {
       date: '2026-03-09',
-      training: 'Marche 30 min + Bench 80x8',
+      training: 'Marche 30 min + curl barre ez 80x8',
     },
     () => 'uid-test',
   );
@@ -37,7 +37,7 @@ test('free training parser detects cardio duration and load x reps blocks', () =
   assert.equal(sessions.length, 2);
   assert.equal(sessions[0].exerciseName, 'Marche');
   assert.equal(sessions[0].reps, 30);
-  assert.equal(sessions[1].exerciseName, 'Bench');
+  assert.equal(sessions[1].exerciseName, 'EZ Bar Curl');
   assert.equal(sessions[1].load, 80);
   assert.equal(sessions[1].reps, 8);
 });

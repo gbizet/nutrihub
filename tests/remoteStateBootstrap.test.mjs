@@ -217,3 +217,137 @@ test('bootstrapRemoteStateIntoLocalStorage skips remote pull when an ongoing wor
     global.window = previousWindow;
   }
 });
+
+test('bootstrapRemoteStateIntoLocalStorage skips remote pull when a critical local mutation is pending', async () => {
+  const storage = createStorage();
+  const previousWindow = global.window;
+  global.window = {
+    localStorage: storage,
+    dispatchEvent: () => {},
+    location: { hostname: '127.0.0.1', origin: 'http://127.0.0.1:3000' },
+  };
+
+  try {
+    storage.setItem('nutri-sport-dashboard-v1', JSON.stringify(buildState({
+      updatedAt: '2026-03-10T19:40:00.000Z',
+      selectedDate: '2026-03-10',
+      sessions: [],
+    })));
+    storage.setItem('nutri-critical-local-mutation-v1', JSON.stringify({
+      kind: 'workout-finalize',
+      updatedAt: '2026-03-10T19:40:00.000Z',
+      workout: {
+        workoutId: 'workout-1',
+        workoutLabel: 'Pull',
+        date: '2026-03-10',
+        sessions: [],
+      },
+    }));
+
+    let fetchCalls = 0;
+    const result = await bootstrapRemoteStateIntoLocalStorage({
+      getConfig: () => ({
+        enabled: true,
+        url: 'http://127.0.0.1:8787/api/state',
+        headers: { Authorization: 'Bearer dev-local-state-token' },
+      }),
+      fetcher: async () => {
+        fetchCalls += 1;
+        return buildState({
+          updatedAt: '2026-03-10T20:00:00.000Z',
+          selectedDate: '2026-03-10',
+          entries: [{ id: 'entry-remote', date: '2026-03-10', grams: 50, meal: 'dejeuner', foodId: 'food-remote', foodName: 'Remote', amount: 1, amountUnit: 'g', macros: { kcal: 100, protein: 10, carbs: 0, fat: 5 } }],
+        });
+      },
+    });
+
+    assert.equal(result.status, 'skipped');
+    assert.equal(result.reason, 'critical-local-mutation-pending');
+    assert.equal(fetchCalls, 0);
+  } finally {
+    global.window = previousWindow;
+  }
+});
+
+test('bootstrapRemoteStateIntoLocalStorage keeps a fresh workout draft from being overwritten by a newer remote state', async () => {
+  const storage = createStorage();
+  const previousWindow = global.window;
+  global.window = {
+    localStorage: storage,
+    dispatchEvent: () => {},
+    location: { hostname: '127.0.0.1', origin: 'http://127.0.0.1:3000' },
+  };
+
+  try {
+    const localState = buildState({
+      updatedAt: '2026-03-10T19:40:00.000Z',
+      selectedDate: '2026-03-10',
+      entries: [{ id: 'entry-local', date: '2026-03-10', grams: 100, meal: 'dejeuner', foodId: 'food-local', foodName: 'Local', amount: 1, amountUnit: 'g', macros: { kcal: 200, protein: 20, carbs: 0, fat: 10 } }],
+      sessions: [],
+    });
+    storage.setItem('nutri-sport-dashboard-v1', JSON.stringify(localState));
+    persistOngoingWorkoutDraft({
+      draftId: 'ongoing-finalize-race',
+      date: '2026-03-10',
+      workoutLabel: 'Dos',
+      durationMin: '18',
+      notes: 'Workout freshly finalized locally',
+      startedAt: '2026-03-10T19:30:00.000Z',
+      updatedAt: '2026-03-10T19:39:30.000Z',
+      activeExerciseId: 'exercise-1',
+      currentExerciseDraft: {
+        exerciseId: '',
+        exerciseName: '',
+        equipment: '',
+        notes: '',
+      },
+      exercises: [
+        {
+          tempId: 'exercise-1',
+          exerciseId: '',
+          exerciseName: 'Face Pull',
+          equipment: 'Poulie double',
+          category: 'Shoulders',
+          order: 1,
+          notes: '',
+          status: 'active',
+          setDetails: [
+            { setIndex: 1, reps: 15, loadDisplayed: 30, loadEstimated: null, timeLabel: '19:35' },
+          ],
+        },
+      ],
+      currentSetDraft: {
+        reps: '15',
+        load: '30',
+        setNote: '',
+        editingSetIndex: null,
+      },
+    });
+
+    let fetchCalls = 0;
+    const result = await bootstrapRemoteStateIntoLocalStorage({
+      getConfig: () => ({
+        enabled: true,
+        url: 'http://127.0.0.1:8787/api/state',
+        headers: { Authorization: 'Bearer dev-local-state-token' },
+      }),
+      fetcher: async () => {
+        fetchCalls += 1;
+        return buildState({
+          updatedAt: '2026-03-10T20:00:00.000Z',
+          selectedDate: '2026-03-10',
+          entries: [{ id: 'entry-remote', date: '2026-03-10', grams: 50, meal: 'dejeuner', foodId: 'food-remote', foodName: 'Remote', amount: 1, amountUnit: 'g', macros: { kcal: 100, protein: 10, carbs: 0, fat: 5 } }],
+          sessions: [{ id: 'session-remote', date: '2026-03-10', exerciseName: 'Bench Press', workoutId: 'w-remote', workoutLabel: 'Push' }],
+        });
+      },
+    });
+
+    assert.equal(result.status, 'skipped');
+    assert.equal(result.reason, 'ongoing-workout-active');
+    assert.equal(fetchCalls, 0);
+    assert.equal(readPersistedDashboardState().entries[0].id, 'entry-local');
+  } finally {
+    clearOngoingWorkoutDraft();
+    global.window = previousWindow;
+  }
+});

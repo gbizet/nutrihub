@@ -54,6 +54,7 @@ export default function SessionTimeline({
   const [expandedNotes, setExpandedNotes] = useState(new Set());
   const [editingId, setEditingId] = useState('');
   const [editingWorkoutId, setEditingWorkoutId] = useState('');
+  const [editingSet, setEditingSet] = useState({ sessionId: '', setIndex: 0 });
   const [draft, setDraft] = useState({
     date: '',
     workoutLabel: '',
@@ -64,6 +65,11 @@ export default function SessionTimeline({
     reps: '',
     load: '',
     notes: '',
+  });
+  const [setLineDraft, setSetLineDraft] = useState({
+    reps: '',
+    load: '',
+    setNote: '',
   });
   const [workoutDraft, setWorkoutDraft] = useState({
     date: '',
@@ -177,87 +183,167 @@ export default function SessionTimeline({
                 }));
                 return (
                   <React.Fragment key={row.id}>
-                    {detailRows.map((detailRow, detailIndex) => (
-                      <tr key={`${row.id}-${detailIndex}`}>
-                        <td>{detailIndex === 0 ? row.exerciseName || 'Exercice' : <span className={styles.smallMuted}>-</span>}</td>
-                        <td>{detailRows.length > 1 ? `#${detailRow.setIndex}` : `${sessionSets(row)}x`}</td>
-                        <td>{detailRow.reps}</td>
-                        <td>{detailRow.load.toFixed(1)} kg</td>
-                        <td>
-                          <div>{formatClockWithSeconds(detailRow.loggedAt) || detailRow.timeLabel || '-'}</div>
-                          {detailRow.elapsedSinceWorkoutStartSec !== null ? (
-                            <div className={styles.smallMuted}>t+{formatDurationShort(detailRow.elapsedSinceWorkoutStartSec)}</div>
-                          ) : null}
-                          <div className={styles.smallMuted}>
-                            {detailRow.restSincePreviousSetSec !== null ? `repos ${formatDurationShort(detailRow.restSincePreviousSetSec)}` : 'repos -'}
-                          </div>
-                        </td>
-                        <td>{detailRow.volume.toFixed(0)}</td>
-                        <td>
-                          {detailRow.setNote ? (
-                            <div style={{ maxWidth: '340px', whiteSpace: 'normal', lineHeight: 1.25 }}>
-                              {detailRow.setNote}
-                            </div>
-                          ) : detailIndex === 0 ? (
-                            <>
-                              <div style={{ maxWidth: '340px', whiteSpace: 'normal', lineHeight: 1.25 }}>
-                                {note ? (expanded ? note : compactText(note, 120)) : '-'}
+                    {detailRows.map((detailRow, detailIndex) => {
+                      const isEditingSet = editingSet.sessionId === row.id && Number(editingSet.setIndex || 0) === Number(detailRow.setIndex || 0);
+                      return (
+                        <React.Fragment key={`${row.id}-${detailRow.setIndex}`}>
+                          <tr>
+                            <td>{detailIndex === 0 ? row.exerciseName || 'Exercice' : <span className={styles.smallMuted}>-</span>}</td>
+                            <td>{detailRows.length > 1 ? `#${detailRow.setIndex}` : `${sessionSets(row)}x`}</td>
+                            <td>{detailRow.reps}</td>
+                            <td>{detailRow.load.toFixed(1)} kg</td>
+                            <td>
+                              <div>{formatClockWithSeconds(detailRow.loggedAt) || detailRow.timeLabel || '-'}</div>
+                              {detailRow.elapsedSinceWorkoutStartSec !== null ? (
+                                <div className={styles.smallMuted}>t+{formatDurationShort(detailRow.elapsedSinceWorkoutStartSec)}</div>
+                              ) : null}
+                              <div className={styles.smallMuted}>
+                                {detailRow.restSincePreviousSetSec !== null ? `repos ${formatDurationShort(detailRow.restSincePreviousSetSec)}` : 'repos -'}
                               </div>
-                              {isLong && (
-                                <button
-                                  className={styles.tinyButton}
-                                  type="button"
-                                  style={{ marginTop: '0.3rem' }}
-                                  onClick={() => {
-                                    setExpandedNotes((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(row.id)) next.delete(row.id);
-                                      else next.add(row.id);
-                                      return next;
-                                    });
-                                  }}
-                                >
-                                  {expanded ? 'Replier' : 'Voir plus'}
-                                </button>
+                            </td>
+                            <td>{detailRow.volume.toFixed(0)}</td>
+                            <td>
+                              {detailRow.setNote ? (
+                                <div style={{ maxWidth: '340px', whiteSpace: 'normal', lineHeight: 1.25 }}>
+                                  {detailRow.setNote}
+                                </div>
+                              ) : detailIndex === 0 ? (
+                                <>
+                                  <div style={{ maxWidth: '340px', whiteSpace: 'normal', lineHeight: 1.25 }}>
+                                    {note ? (expanded ? note : compactText(note, 120)) : '-'}
+                                  </div>
+                                  {isLong && (
+                                    <button
+                                      className={styles.tinyButton}
+                                      type="button"
+                                      style={{ marginTop: '0.3rem' }}
+                                      onClick={() => {
+                                        setExpandedNotes((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(row.id)) next.delete(row.id);
+                                          else next.add(row.id);
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      {expanded ? 'Replier' : 'Voir plus'}
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <span className={styles.smallMuted}>-</span>
                               )}
-                            </>
-                          ) : (
-                            <span className={styles.smallMuted}>-</span>
-                          )}
-                        </td>
-                        <td>
-                          {detailIndex === 0 ? (
-                            <div style={{ display: 'grid', gap: '0.35rem' }}>
-                              {canEdit && (
-                                <button
-                                  className={styles.tinyButton}
-                                  type="button"
-                                onClick={() => {
-                                  setEditingId(row.id);
-                                  setDraft({
-                                    date: row.date || '',
-                                    workoutLabel: row.workoutLabel || row.sessionGroupLabel || workout.title || '',
-                                      exerciseName: row.exerciseName || '',
-                                      equipment: row.equipment || '',
-                                      durationMin: row.durationMin === null || row.durationMin === undefined ? '' : `${row.durationMin}`,
-                                      sets: `${sessionSets(row)}`,
-                                      reps: `${sessionReps(row)}`,
-                                      load: `${sessionTopLoad(row)}`,
-                                      notes: row.notes || '',
-                                  });
-                                }}
-                              >
-                                  Editer exo
-                                </button>
-                              )}
-                              <button className={styles.tinyButton} type="button" onClick={() => onRemove(row)}>Suppr.</button>
-                            </div>
-                          ) : (
-                            <span className={styles.smallMuted}>-</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                            </td>
+                            <td>
+                              <div style={{ display: 'grid', gap: '0.35rem' }}>
+                                {canEdit ? (
+                                  <button
+                                    className={styles.tinyButton}
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingId('');
+                                      setEditingSet({ sessionId: row.id, setIndex: Number(detailRow.setIndex || 0) });
+                                      setSetLineDraft({
+                                        reps: `${detailRow.reps ?? ''}`,
+                                        load: `${detailRow.load ?? ''}`,
+                                        setNote: `${detailRow.setNote || ''}`,
+                                      });
+                                    }}
+                                  >
+                                    {`Editer set #${detailRow.setIndex}`}
+                                  </button>
+                                ) : null}
+                                {detailIndex === 0 ? (
+                                  <>
+                                    {canEdit && (
+                                      <button
+                                        className={styles.tinyButton}
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingSet({ sessionId: '', setIndex: 0 });
+                                          setEditingId(row.id);
+                                          setDraft({
+                                            date: row.date || '',
+                                            workoutLabel: row.workoutLabel || row.sessionGroupLabel || workout.title || '',
+                                            exerciseName: row.exerciseName || '',
+                                            equipment: row.equipment || '',
+                                            durationMin: row.durationMin === null || row.durationMin === undefined ? '' : `${row.durationMin}`,
+                                            sets: `${sessionSets(row)}`,
+                                            reps: `${sessionReps(row)}`,
+                                            load: `${sessionTopLoad(row)}`,
+                                            notes: row.notes || '',
+                                          });
+                                        }}
+                                      >
+                                        Editer exo
+                                      </button>
+                                    )}
+                                    <button className={styles.tinyButton} type="button" onClick={() => onRemove(row)}>Suppr.</button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                          {isEditingSet ? (
+                            <tr>
+                              <td colSpan="8">
+                                <div className={styles.formGrid} style={{ marginTop: '0.4rem' }}>
+                                  <input
+                                    className={styles.input}
+                                    type="number"
+                                    placeholder="Reps set"
+                                    value={setLineDraft.reps}
+                                    onChange={(e) => setSetLineDraft((prev) => ({ ...prev, reps: e.target.value }))}
+                                  />
+                                  <input
+                                    className={styles.input}
+                                    type="number"
+                                    step="0.1"
+                                    placeholder="Charge kg set"
+                                    value={setLineDraft.load}
+                                    onChange={(e) => setSetLineDraft((prev) => ({ ...prev, load: e.target.value }))}
+                                  />
+                                  <input
+                                    className={styles.input}
+                                    placeholder="Note set"
+                                    value={setLineDraft.setNote}
+                                    onChange={(e) => setSetLineDraft((prev) => ({ ...prev, setNote: e.target.value }))}
+                                  />
+                                  <button
+                                    className={styles.button}
+                                    type="button"
+                                    onClick={() => {
+                                      const nextSetDetails = getSessionSetDetails(row).map((setRow) => (
+                                        Number(setRow.setIndex || 0) === Number(detailRow.setIndex || 0)
+                                          ? {
+                                            ...setRow,
+                                            reps: Number.parseFloat(setLineDraft.reps) || 0,
+                                            loadDisplayed: Number.parseFloat(setLineDraft.load) || 0,
+                                            loadEstimated: null,
+                                            setNote: `${setLineDraft.setNote || ''}`.trim(),
+                                          }
+                                          : setRow
+                                      ));
+                                      onUpdate(row, { setDetails: nextSetDetails });
+                                      setEditingSet({ sessionId: '', setIndex: 0 });
+                                    }}
+                                  >
+                                    Enregistrer set
+                                  </button>
+                                  <button
+                                    className={styles.buttonGhost}
+                                    type="button"
+                                    onClick={() => setEditingSet({ sessionId: '', setIndex: 0 })}
+                                  >
+                                    Annuler set
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </React.Fragment>
+                      );
+                    })}
                     {editingId === row.id && (
                       <tr>
                         <td colSpan="8">

@@ -28,14 +28,23 @@ logs/
 .env
 .env.local
 .env.*.local
+.env.local-state
 
 # Ignore local generated files
 coverage/
 data/
 tmp/
+Media/
 current_ui.xml
 hc_*.xml
 hctoolbox_*.xml
+incident-sync-screen.png
+review-screen-*.png
+tablet-current.png
+tmp-device-*.png
+tmp-home.xml
+tmp-window*.xml
+lyngdorf-bundle.js
 android/local.properties
 android/.gradle/
 android/app/build/

@@ -57,7 +57,12 @@ import {
   clearSyncDebugLog,
   formatSyncDebugEntries,
 } from '../lib/syncDebug';
+import {
+  ANDROID_RUNTIME_STATS_EVENT,
+  readAndroidRuntimeStats,
+} from '../lib/androidRuntimeStats.js';
 import { hasOngoingWorkoutDraft } from '../lib/ongoingWorkout.js';
+import { clearPendingCriticalLocalMutation } from '../lib/criticalLocalMutation.js';
 import {
   canUseStateServerSnapshots,
   createStateServerSnapshot,
@@ -176,6 +181,7 @@ export default function IntegrationsPage() {
   const [healthNotice, setHealthNotice] = useState('');
   const [recoverySnapshots, setRecoverySnapshots] = useState([]);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const [androidRuntimeStats, setAndroidRuntimeStats] = useState(() => readAndroidRuntimeStats());
 
   const driveConfig = getGoogleDriveConfig();
   const deviceId = ensureDeviceId();
@@ -377,6 +383,7 @@ export default function IntegrationsPage() {
         localUpdatedAt: latestLocalState?.updatedAt || null,
         remoteUpdatedAt: result.updatedAt || null,
       });
+      clearPendingCriticalLocalMutation(latestLocalState?.updatedAt || result.updatedAt || '');
     } catch (error) {
       appendSyncDebugLog('IntegrationsPage', 'pushLocalToDrive failed', {
         error,
@@ -623,6 +630,17 @@ export default function IntegrationsPage() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleRuntimeStats = (event) => {
+      setAndroidRuntimeStats(event?.detail || readAndroidRuntimeStats());
+    };
+    window.addEventListener(ANDROID_RUNTIME_STATS_EVENT, handleRuntimeStats);
+    return () => {
+      window.removeEventListener(ANDROID_RUNTIME_STATS_EVENT, handleRuntimeStats);
+    };
+  }, []);
+
+  useEffect(() => {
     refreshRecoverySnapshots();
   }, [stateServerSnapshotsEnabled]);
 
@@ -756,7 +774,7 @@ export default function IntegrationsPage() {
                 </button>
               </div>
               <p className={styles.smallMuted} style={{ marginTop: '0.7rem' }}>
-                Autosync: push debounce 10s sur changement local. Pull auto et import sante a l ouverture/reprise quand la session Drive est valide.
+                Autosync: push debounce 10s sur web, 30s sur mobile natif. Pull auto et import sante a l ouverture/reprise quand la session Drive est valide.
               </p>
               {ongoingWorkoutActive ? (
                 <p className={styles.smallMuted} style={{ color: '#a14a08' }}>
@@ -770,7 +788,7 @@ export default function IntegrationsPage() {
             <article className={styles.card}>
               <h2>Snapshots de secours</h2>
               <p className={styles.smallMuted}>
-                Avant un pull ou un push Drive, l app cree un snapshot disque via le companion local quand il est disponible. Ces snapshots survivent a un refresh navigateur et a une erreur de sync PC.
+                Avant un pull ou un push Drive manuel, l app cree un snapshot disque via le companion local quand il est disponible. Les flux auto n en creent plus pour eviter le bruit disque sur PC.
               </p>
               {!stateServerSnapshotsEnabled ? (
                 <p className={styles.smallMuted}>
@@ -982,6 +1000,79 @@ export default function IntegrationsPage() {
               </p>
               <textarea className={styles.textarea} value={syncPreview} readOnly />
             </details>
+          </section>
+
+          <section className={styles.grid2}>
+            <article className={styles.card}>
+              <h2>Runtime Android</h2>
+              <p className={styles.smallMuted}>
+                Instrumentation locale pour distinguer reprise foreground, Health import, persistance WebView et autosync.
+              </p>
+              <div className={styles.insightGrid}>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Dernier foreground</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.lastForegroundAt || '-'}</div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Sequence</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.foregroundSequence || 0}</div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Duplicate skip</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.duplicateForegroundSkipCount || 0}</div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Dernier pull auto</div>
+                  <div className={styles.insightValue}>
+                    {androidRuntimeStats.lastAutoPullAt || '-'}
+                    {androidRuntimeStats.lastAutoPullDurationMs ? ` | ${androidRuntimeStats.lastAutoPullDurationMs} ms` : ''}
+                  </div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Skip pull</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.lastAutoPullSkippedReason || '-'}</div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Dernier import auto</div>
+                  <div className={styles.insightValue}>
+                    {androidRuntimeStats.lastAutoHealthImportAt || '-'}
+                    {androidRuntimeStats.lastAutoHealthImportDurationMs ? ` | ${androidRuntimeStats.lastAutoHealthImportDurationMs} ms` : ''}
+                  </div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Skip import</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.lastAutoHealthImportSkippedReason || '-'}</div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Dernier persist</div>
+                  <div className={styles.insightValue}>
+                    {androidRuntimeStats.lastPersistAt || '-'}
+                    {androidRuntimeStats.lastPersistDurationMs ? ` | ${androidRuntimeStats.lastPersistDurationMs} ms` : ''}
+                  </div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Taille state ecrit</div>
+                  <div className={styles.insightValue}>
+                    {androidRuntimeStats.lastPersistSizeBytes ? `${androidRuntimeStats.lastPersistSizeBytes} bytes` : '-'}
+                  </div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Skip persist</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.lastPersistSkippedReason || '-'}</div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Dernier auto-push</div>
+                  <div className={styles.insightValue}>
+                    {androidRuntimeStats.lastAutoPushAt || '-'}
+                    {androidRuntimeStats.lastAutoPushDebounceMs ? ` | debounce ${androidRuntimeStats.lastAutoPushDebounceMs} ms` : ''}
+                  </div>
+                </div>
+                <div className={styles.insightItem}>
+                  <div className={styles.insightLabel}>Skip auto-push</div>
+                  <div className={styles.insightValue}>{androidRuntimeStats.lastAutoPushSkippedReason || '-'}</div>
+                </div>
+              </div>
+            </article>
           </section>
 
           <section>

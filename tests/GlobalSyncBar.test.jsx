@@ -15,6 +15,12 @@ const mocks = vi.hoisted(() => ({
   appendSyncDebugLog: vi.fn(),
   createStateServerSnapshot: vi.fn(),
   isNativeMobileRuntime: vi.fn(),
+  capacitorAddListener: vi.fn(),
+  appStateChangeHandler: null,
+  isAutoRefreshBusy: vi.fn(),
+  setAppActive: vi.fn(),
+  setAutoRefreshBusy: vi.fn(),
+  updateAndroidRuntimeStats: vi.fn(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -65,14 +71,32 @@ vi.mock('../src/lib/stateRecovery.js', () => ({
   createStateServerSnapshot: mocks.createStateServerSnapshot,
 }));
 
+vi.mock('@capacitor/app', () => ({
+  App: {
+    addListener: mocks.capacitorAddListener,
+  },
+}));
+
+vi.mock('../src/lib/appRuntime.js', () => ({
+  isAutoRefreshBusy: mocks.isAutoRefreshBusy,
+  setAppActive: mocks.setAppActive,
+  setAutoRefreshBusy: mocks.setAutoRefreshBusy,
+}));
+
+vi.mock('../src/lib/androidRuntimeStats.js', () => ({
+  updateAndroidRuntimeStats: mocks.updateAndroidRuntimeStats,
+}));
+
 import GlobalSyncBar, { __resetGlobalSyncBarBootStateForTests } from '../src/app/GlobalSyncBar.js';
 
 describe('GlobalSyncBar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
     window.localStorage.clear();
     window.sessionStorage.clear();
     __resetGlobalSyncBarBootStateForTests();
+    mocks.appStateChangeHandler = null;
     let currentState = {
       updatedAt: '2026-03-10T08:00:00.000Z',
       selectedDate: '2026-03-10',
@@ -84,6 +108,7 @@ describe('GlobalSyncBar', () => {
       currentState = nextState;
     });
     mocks.isNativeMobileRuntime.mockReturnValue(false);
+    mocks.isAutoRefreshBusy.mockReturnValue(false);
     mocks.hasOngoingWorkoutDraft.mockReturnValue(false);
     mocks.pushLocalStateToDrive.mockResolvedValue({
       updatedAt: '2026-03-10T08:00:00.000Z',
@@ -105,6 +130,12 @@ describe('GlobalSyncBar', () => {
       startDate: '2026-02-10',
       endDate: '2026-03-10',
     });
+    mocks.capacitorAddListener.mockImplementation((eventName, handler) => {
+      if (eventName === 'appStateChange') {
+        mocks.appStateChangeHandler = handler;
+      }
+      return { remove: vi.fn() };
+    });
   });
 
   it('uses the shared drive push service on manual sync', async () => {
@@ -121,9 +152,43 @@ describe('GlobalSyncBar', () => {
         updatedAt: '2026-03-10T08:00:00.000Z',
       }),
     }));
+    expect(mocks.createStateServerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updatedAt: '2026-03-10T08:00:00.000Z',
+      }),
+      expect.objectContaining({
+        reason: 'before-manual-sync-push',
+      }),
+    );
     await waitFor(() => {
       expect(screen.getByText(/Sync OK vers Mon Drive\/Nutri Sport Hub\./i)).toBeInTheDocument();
     });
+  });
+
+  it('does not create recovery snapshots for auto sync flows on desktop', async () => {
+    render(React.createElement(GlobalSyncBar));
+
+    await waitFor(() => {
+      expect(mocks.pullDriveStateToLocal).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.createStateServerSnapshot).not.toHaveBeenCalled();
+
+    mocks.pullDriveStateToLocal.mockClear();
+    mocks.pushLocalStateToDrive.mockClear();
+
+    vi.useFakeTimers();
+    window.dispatchEvent(new CustomEvent('nutri-dashboard-state', {
+      detail: {
+        updatedAt: '2026-03-10T08:10:00.000Z',
+        source: 'manual-edit',
+      },
+    }));
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.resolve();
+    expect(mocks.pushLocalStateToDrive.mock.calls.length).toBeGreaterThan(0);
+    expect(mocks.createStateServerSnapshot).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it('skips auto pull when an ongoing workout draft is active locally', async () => {
@@ -135,6 +200,82 @@ describe('GlobalSyncBar', () => {
       expect(mocks.appendSyncDebugLog).toHaveBeenCalledWith('GlobalSyncBar', 'auto pull skipped', expect.objectContaining({
         cause: 'ongoing-workout-active',
       }));
+    });
+    expect(mocks.pullDriveStateToLocal).not.toHaveBeenCalled();
+  });
+
+  it('skips auto pull when a critical local mutation is still pending', async () => {
+    window.localStorage.setItem('nutri-critical-local-mutation-v1', JSON.stringify({
+      kind: 'workout-finalize',
+      updatedAt: '2026-03-10T08:00:00.000Z',
+      workout: {
+        workoutId: 'workout-1',
+        workoutLabel: 'Pull',
+        date: '2026-03-10',
+        sessions: [],
+      },
+    }));
+    mocks.pushLocalStateToDrive.mockRejectedValueOnce(Object.assign(new Error('remote newer'), {
+      code: 'REMOTE_NEWER',
+    }));
+
+    render(React.createElement(GlobalSyncBar));
+
+    await waitFor(() => {
+      expect(mocks.appendSyncDebugLog).toHaveBeenCalledWith('GlobalSyncBar', 'auto pull skipped', expect.objectContaining({
+        cause: 'critical-local-mutation-pending',
+      }));
+    });
+    expect(mocks.pushLocalStateToDrive).toHaveBeenCalledTimes(1);
+    expect(mocks.pullDriveStateToLocal).not.toHaveBeenCalled();
+  });
+
+  it('keeps mobile resume auto-pull blocked while a workout draft is still open', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-10T08:00:00.000Z'));
+    mocks.isNativeMobileRuntime.mockReturnValue(true);
+    mocks.hasOngoingWorkoutDraft.mockReturnValue(true);
+
+    render(React.createElement(GlobalSyncBar));
+
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    mocks.pullDriveStateToLocal.mockClear();
+    mocks.appendSyncDebugLog.mockClear();
+
+    vi.setSystemTime(new Date('2026-03-10T08:00:06.000Z'));
+    mocks.appStateChangeHandler?.({ isActive: true });
+
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(mocks.appendSyncDebugLog).toHaveBeenCalledWith(
+      'GlobalSyncBar',
+      'auto pull skipped',
+      expect.objectContaining({
+        reason: 'resume',
+        cause: 'ongoing-workout-active',
+      }),
+    );
+    expect(mocks.pullDriveStateToLocal).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('keeps mobile launch auto-pull blocked while a workout draft is still open', async () => {
+    mocks.isNativeMobileRuntime.mockReturnValue(true);
+    mocks.hasOngoingWorkoutDraft.mockReturnValue(true);
+
+    render(React.createElement(GlobalSyncBar));
+
+    await waitFor(() => {
+      expect(mocks.appendSyncDebugLog).toHaveBeenCalledWith(
+        'GlobalSyncBar',
+        'auto pull skipped',
+        expect.objectContaining({
+          cause: 'ongoing-workout-active',
+        }),
+      );
     });
     expect(mocks.pullDriveStateToLocal).not.toHaveBeenCalled();
   });
@@ -169,7 +310,9 @@ describe('GlobalSyncBar', () => {
     });
   });
 
-  it('applies the 15 minute cooldown on resume after the launch import ran', async () => {
+  it('applies the 6 hour cooldown on resume after the launch import ran', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-10T08:00:00.000Z'));
     mocks.isNativeMobileRuntime.mockReturnValue(true);
     mocks.getHealthIntegrationStatus.mockResolvedValue({
       healthConnectAvailable: true,
@@ -186,20 +329,49 @@ describe('GlobalSyncBar', () => {
 
     render(React.createElement(GlobalSyncBar));
 
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    expect(mocks.importAutoHealthWindow).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-03-10T08:00:06.000Z'));
+    mocks.appStateChangeHandler?.({ isActive: true });
+
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    expect(mocks.appendSyncDebugLog).toHaveBeenCalledWith(
+      'GlobalSyncBar',
+      'auto health import skipped',
+      expect.objectContaining({ reason: 'resume', cause: 'cooldown-active' }),
+    );
+    expect(mocks.importAutoHealthWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not auto-push Drive after a successful auto health import on mobile', async () => {
+    mocks.isNativeMobileRuntime.mockReturnValue(true);
+    mocks.getHealthIntegrationStatus.mockResolvedValue({
+      healthConnectAvailable: true,
+      missingPermissions: [],
+      samsungDataSdkFallbackAvailable: false,
+    });
+    mocks.importAutoHealthWindow.mockResolvedValue({
+      importMode: 'auto',
+      importedAt: new Date().toISOString(),
+      records: {
+        activity: [
+          { date: '2026-03-10', steps: 7123, provider: 'health-connect' },
+        ],
+      },
+      startDate: '2026-03-09',
+      endDate: '2026-03-10',
+    });
+
+    render(React.createElement(GlobalSyncBar));
+
     await waitFor(() => {
       expect(mocks.importAutoHealthWindow).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.focus(window);
-
-    await waitFor(() => {
-      expect(mocks.appendSyncDebugLog).toHaveBeenCalledWith(
-        'GlobalSyncBar',
-        'auto health import skipped',
-        expect.objectContaining({ reason: 'resume', cause: 'cooldown-active' }),
-      );
-    });
-    expect(mocks.importAutoHealthWindow).toHaveBeenCalledTimes(1);
+    expect(mocks.pushLocalStateToDrive).not.toHaveBeenCalled();
   });
 
   it('pulls Drive before mobile health import so newer PC data is preserved on launch', async () => {

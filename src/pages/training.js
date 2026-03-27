@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../app/AppLayout.js';
 import styles from './dashboard.module.css';
-import { toPositive, useDashboardState } from '../lib/dashboardStore';
+import { persistDashboardState, toPositive, useDashboardState } from '../lib/dashboardStore';
 import { useLocalPageUiState } from '../lib/localUiState.js';
 import LayoutBlocks from '../components/LayoutBlocks';
 import DateNav from '../components/DateNav';
@@ -30,6 +30,8 @@ import {
   persistOngoingWorkoutDraft,
   readOngoingWorkoutDraft,
 } from '../lib/ongoingWorkout.js';
+import { APP_ACTIVITY_EVENT, isAppActive } from '../lib/appRuntime.js';
+import { markPendingCriticalLocalMutation } from '../lib/criticalLocalMutation.js';
 
 const equipment = EQUIPMENT_OPTIONS;
 const TRAINING_CATEGORIES = [
@@ -551,7 +553,7 @@ const scrollIntoViewForCapture = (element) => {
   if (typeof element?.scrollIntoView !== 'function') return;
   element.scrollIntoView({
     behavior: isSmallViewport() ? 'auto' : 'smooth',
-    block: isSmallViewport() ? 'nearest' : 'start',
+    block: isSmallViewport() ? 'center' : 'start',
   });
 };
 
@@ -565,12 +567,13 @@ const focusWithoutScroll = (element) => {
 };
 
 export default function TrainingPage() {
-  const { state, setState, uid } = useDashboardState();
+  const { state, setState, replaceState, uid } = useDashboardState();
   const [exerciseForm, setExerciseForm] = useState(() => buildExerciseForm());
   const [editingLibraryExerciseId, setEditingLibraryExerciseId] = useState('');
   const [workoutStartForm, setWorkoutStartForm] = useState(() => normalizeWorkoutDraftInput({ date: state.selectedDate }, state.selectedDate));
   const [ongoingWorkout, setOngoingWorkout] = useState(() => readOngoingWorkoutDraft());
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
+  const [appActive, setAppActiveState] = useState(() => isAppActive());
   const [showWorkoutMeta, setShowWorkoutMeta] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [setComposerFocused, setSetComposerFocused] = useState(false);
@@ -579,6 +582,7 @@ export default function TrainingPage() {
   const repsInputRef = useRef(null);
   const loadInputRef = useRef(null);
   const gymBarRef = useRef(null);
+  const actionRailRef = useRef(null);
   const prevActiveExerciseIdRef = useRef(ongoingWorkout?.activeExerciseId ?? null);
   const [pasteText, setPasteText] = useState('');
   const [parseStatus, setParseStatus] = useState('');
@@ -677,6 +681,45 @@ export default function TrainingPage() {
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined;
+    const root = document.documentElement;
+    const updateActionRailHeight = () => {
+      const nextHeight = compactMobileCaptureUi
+        ? Math.ceil(actionRailRef.current?.getBoundingClientRect()?.height || 0)
+        : 0;
+      root.style.setProperty('--training-action-rail-height', `${nextHeight}px`);
+    };
+
+    updateActionRailHeight();
+
+    if (!compactMobileCaptureUi) {
+      return () => {
+        root.style.setProperty('--training-action-rail-height', '0px');
+      };
+    }
+
+    if (typeof ResizeObserver === 'function' && actionRailRef.current) {
+      const observer = new ResizeObserver(() => updateActionRailHeight());
+      observer.observe(actionRailRef.current);
+      return () => {
+        observer.disconnect();
+        root.style.setProperty('--training-action-rail-height', '0px');
+      };
+    }
+
+    window.addEventListener('resize', updateActionRailHeight);
+    return () => {
+      window.removeEventListener('resize', updateActionRailHeight);
+      root.style.setProperty('--training-action-rail-height', '0px');
+    };
+  }, [
+    compactMobileCaptureUi,
+    ongoingWorkout?.activeExerciseId,
+    ongoingWorkout?.currentSetDraft?.editingSetIndex,
+    ongoingWorkout?.exercises,
+  ]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
     const body = document.body;
     if (!body) return undefined;
 
@@ -694,7 +737,11 @@ export default function TrainingPage() {
   useEffect(() => {
     if (!setKeyboardMode) return undefined;
     const timer = window.setTimeout(() => {
-      scrollIntoViewForCapture(setFormRef.current);
+      const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+      const focusTarget = setFormRef.current?.contains(activeElement)
+        ? activeElement
+        : (repsInputRef.current || setFormRef.current);
+      scrollIntoViewForCapture(focusTarget);
     }, 50);
     return () => {
       window.clearTimeout(timer);
@@ -854,6 +901,7 @@ export default function TrainingPage() {
         exerciseForm.category || lookup.knownExercise?.category || '',
         prev.exerciseMuscleOverrides,
       );
+      const canonicalName = lookup.knownExercise?.name || nextName;
       const item = {
         id:
           editingLibraryExerciseId
@@ -861,7 +909,7 @@ export default function TrainingPage() {
             normalizeExerciseMappingKey(exercise.name) === normalizeExerciseMappingKey(nextName)
           ))?.id
           || uid(),
-        name: nextName,
+        name: canonicalName,
         equipment: `${exerciseForm.equipment || lookup.knownExercise?.equipment || equipment[0] || ''}`.trim(),
         category: `${exerciseForm.category || lookup.knownExercise?.category || inferTrainingCategory(nextName, muscleGroupKey)}`.trim() || 'Upper Body',
       };
@@ -955,7 +1003,7 @@ export default function TrainingPage() {
     prevActiveExerciseIdRef.current = currentId;
     if (currentId === previousId) return;
     if (currentId) {
-      scrollIntoViewForCapture(setFormRef.current);
+      scrollIntoViewForCapture(repsInputRef.current || setFormRef.current);
       setTimeout(() => focusWithoutScroll(repsInputRef.current), 120);
     } else {
       scrollIntoViewForCapture(exercisePickerRef.current);
@@ -1015,13 +1063,25 @@ export default function TrainingPage() {
   }, [ongoingWorkout]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleAppActivity = (event) => {
+      setAppActiveState(Boolean(event?.detail?.isActive));
+    };
+    window.addEventListener(APP_ACTIVITY_EVENT, handleAppActivity);
+    return () => {
+      window.removeEventListener(APP_ACTIVITY_EVENT, handleAppActivity);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!ongoingWorkout?.draftId) return undefined;
+    if (!appActive) return undefined;
     setLiveNowMs(Date.now());
     const timerId = window.setInterval(() => {
       setLiveNowMs(Date.now());
     }, 1000);
     return () => window.clearInterval(timerId);
-  }, [ongoingWorkout?.draftId]);
+  }, [appActive, ongoingWorkout?.draftId]);
 
   const startOngoingWorkout = (event) => {
     event.preventDefault();
@@ -1219,9 +1279,9 @@ export default function TrainingPage() {
     setSetComposerFocused(Boolean(activeElement && setFormRef.current?.contains(activeElement)));
   };
 
-  const handleSetComposerInputFocus = () => {
+  const handleSetComposerInputFocus = (event) => {
     setSetComposerFocused(true);
-    setTimeout(() => scrollIntoViewForCapture(setFormRef.current), 40);
+    setTimeout(() => scrollIntoViewForCapture(event?.currentTarget || setFormRef.current), 40);
   };
 
   const handleSetComposerInputBlur = () => {
@@ -1364,64 +1424,79 @@ export default function TrainingPage() {
       setWorkoutStartForm(normalizeWorkoutDraftInput({ date: state.selectedDate }, state.selectedDate));
       return;
     }
-    setState((prev) => {
-      let nextExercisesLibrary = prev.exercises;
-      const workoutLabel = `${ongoingWorkout.workoutLabel || ''}`.trim() || 'Seance manuelle';
-      const workoutId = `${ongoingWorkout.draftId || uid()}`.trim() || uid();
-      const autoDurationSec = ongoingWorkout.startedAt
-        ? secondsBetween(new Date().toISOString(), ongoingWorkout.startedAt)
-        : null;
-      const durationMin = `${ongoingWorkout.durationMin ?? ''}`.trim()
-        ? toPositive(ongoingWorkout.durationMin, 0)
-        : (
-          autoDurationSec === null || autoDurationSec === undefined
-            ? ongoingWorkoutAutoDurationMin
-            : Math.max(1, Math.ceil(autoDurationSec / 60))
-        );
-      const sortedExercises = [...ongoingWorkout.exercises].sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
-      const nextSessions = sortedExercises.reduce((acc, exercise, index) => {
-        const summary = summarizeExerciseSetDetails(exercise.setDetails, ongoingWorkout.startedAt);
-        if (!summary.setCount) return acc;
-        const resolution = resolveExerciseDraft({
-          exercises: nextExercisesLibrary,
-          exerciseId: exercise.exerciseId,
-          exerciseName: exercise.exerciseName,
-          equipmentValue: exercise.equipment,
-          exerciseMuscleOverrides: prev.exerciseMuscleOverrides,
-          uid,
-        });
-        if (!resolution) return acc;
-        nextExercisesLibrary = resolution.nextExercises;
-        acc.push({
-          id: uid(),
-          date: ongoingWorkout.date || state.selectedDate,
-          workoutId,
-          workoutLabel,
-          exerciseOrder: index + 1,
-          exerciseId: resolution.exercise.id,
-          exerciseName: resolution.exercise.name,
-          equipment: resolution.equipment,
-          category: resolution.category,
-          durationMin,
-          sets: summary.setCount,
-          reps: summary.totalReps,
-          load: summary.topLoad,
-          notes: `${exercise.notes || ''}`.trim(),
-          workoutNotes: `${ongoingWorkout.notes || ''}`.trim(),
-          source: 'manual',
-          sessionGroupId: workoutId,
-          sessionGroupLabel: workoutLabel,
-          setDetails: summary.setDetails,
-        });
-        return acc;
-      }, []);
-      if (!nextSessions.length) return prev;
-      return {
-        ...prev,
+    let nextExercisesLibrary = state.exercises;
+    const workoutLabel = `${ongoingWorkout.workoutLabel || ''}`.trim() || 'Seance manuelle';
+    const workoutId = `${ongoingWorkout.draftId || uid()}`.trim() || uid();
+    const autoDurationSec = ongoingWorkout.startedAt
+      ? secondsBetween(new Date().toISOString(), ongoingWorkout.startedAt)
+      : null;
+    const durationMin = `${ongoingWorkout.durationMin ?? ''}`.trim()
+      ? toPositive(ongoingWorkout.durationMin, 0)
+      : (
+        autoDurationSec === null || autoDurationSec === undefined
+          ? ongoingWorkoutAutoDurationMin
+          : Math.max(1, Math.ceil(autoDurationSec / 60))
+      );
+    const sortedExercises = [...ongoingWorkout.exercises].sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+    const nextSessions = sortedExercises.reduce((acc, exercise, index) => {
+      const summary = summarizeExerciseSetDetails(exercise.setDetails, ongoingWorkout.startedAt);
+      if (!summary.setCount) return acc;
+      const resolution = resolveExerciseDraft({
         exercises: nextExercisesLibrary,
-        sessions: [...prev.sessions, ...nextSessions],
-      };
+        exerciseId: exercise.exerciseId,
+        exerciseName: exercise.exerciseName,
+        equipmentValue: exercise.equipment,
+        exerciseMuscleOverrides: state.exerciseMuscleOverrides,
+        uid,
+      });
+      if (!resolution) return acc;
+      nextExercisesLibrary = resolution.nextExercises;
+      acc.push({
+        id: uid(),
+        date: ongoingWorkout.date || state.selectedDate,
+        workoutId,
+        workoutLabel,
+        exerciseOrder: index + 1,
+        exerciseId: resolution.exercise.id,
+        exerciseName: resolution.exercise.name,
+        equipment: resolution.equipment,
+        category: resolution.category,
+        durationMin,
+        sets: summary.setCount,
+        reps: summary.totalReps,
+        load: summary.topLoad,
+        notes: `${exercise.notes || ''}`.trim(),
+        workoutNotes: `${ongoingWorkout.notes || ''}`.trim(),
+        source: 'manual',
+        sessionGroupId: workoutId,
+        sessionGroupLabel: workoutLabel,
+        setDetails: summary.setDetails,
+      });
+      return acc;
+    }, []);
+    if (!nextSessions.length) return;
+    const nextState = {
+      ...state,
+      updatedAt: new Date().toISOString(),
+      exercises: nextExercisesLibrary,
+      sessions: [...state.sessions, ...nextSessions],
+    };
+    markPendingCriticalLocalMutation({
+      kind: 'workout-finalize',
+      updatedAt: nextState.updatedAt,
+      source: 'training.finalize',
+      workout: {
+        workoutId,
+        workoutLabel,
+        date: ongoingWorkout.date || state.selectedDate,
+        durationMin,
+        sessionCount: nextSessions.length,
+        sessions: nextSessions,
+      },
     });
+    const persisted = persistDashboardState(nextState);
+    if (!persisted) return;
+    replaceState(nextState);
     clearOngoingWorkoutDraft();
     setOngoingWorkout(null);
     setWorkoutStartForm(normalizeWorkoutDraftInput({ date: state.selectedDate }, state.selectedDate));
@@ -1507,6 +1582,9 @@ export default function TrainingPage() {
             const currentSets = sessionSets(row);
             const currentReps = sessionReps(row);
             const currentLoad = sessionTopLoad(row);
+            const detailedPatchSummary = Array.isArray(patch.setDetails)
+              ? summarizeExerciseSetDetails(patch.setDetails)
+              : null;
             const nextSets = toPositive(patch.sets, currentSets);
             const nextReps = toPositive(patch.reps, currentReps);
             const nextLoad = toPositive(patch.load, currentLoad);
@@ -1524,7 +1602,12 @@ export default function TrainingPage() {
               notes: nextNotes,
             };
 
-            if (Array.isArray(row.setDetails) && row.setDetails.length > 0) {
+            if (detailedPatchSummary?.setDetails?.length) {
+              updated.sets = detailedPatchSummary.setCount;
+              updated.reps = detailedPatchSummary.totalReps;
+              updated.load = detailedPatchSummary.topLoad;
+              updated.setDetails = detailedPatchSummary.setDetails;
+            } else if (Array.isArray(row.setDetails) && row.setDetails.length > 0) {
               const structureChanged = nextSets !== currentSets || nextReps !== currentReps || nextLoad !== currentLoad;
               updated.setDetails = structureChanged ? buildUniformSetDetails(nextSets, nextReps, nextLoad) : row.setDetails;
             }
@@ -1560,7 +1643,9 @@ export default function TrainingPage() {
       const importedRows = parsedWorkout.exercises.map((exercise, index) => {
         const topDisplayed = exercise.sets.reduce((max, setRow) => Math.max(max, setRow.loadDisplayed || 0), 0);
         const totalReps = exercise.sets.reduce((acc, setRow) => acc + (setRow.reps || 0), 0);
-        const muscleGroupKey = resolveMuscleGroupWithOverrides(exercise.name, '', prev.exerciseMuscleOverrides);
+        const lookup = resolveKnownExercise(prev.exercises, '', exercise.name);
+        const canonicalName = lookup.knownExercise?.name || exercise.name;
+        const muscleGroupKey = resolveMuscleGroupWithOverrides(canonicalName, '', prev.exerciseMuscleOverrides);
         return {
           id: uid(),
           date: parsedWorkout.date,
@@ -1568,9 +1653,9 @@ export default function TrainingPage() {
           workoutLabel: parsedWorkout.title,
           exerciseOrder: index + 1,
           exerciseId: `import-${uid()}`,
-          exerciseName: exercise.name,
+          exerciseName: canonicalName,
           equipment: 'Imported',
-          category: inferTrainingCategory(exercise.name, muscleGroupKey),
+          category: inferTrainingCategory(canonicalName, muscleGroupKey),
           sets: exercise.sets.length,
           reps: totalReps,
           load: topDisplayed,
@@ -1701,9 +1786,21 @@ export default function TrainingPage() {
     ? 'Mettre a jour la serie'
     : 'Ajouter la serie';
   const activeExerciseEquipmentLabel = activeOngoingExercise?.equipment || ongoingWorkout?.currentExerciseDraft?.equipment || 'Materiel libre';
+  const activeOngoingExerciseSetCount = Number(activeOngoingExercise?.setDetails?.length || 0);
   const activeExerciseRestLabel = activeOngoingExerciseCurrentRestSec === null
     ? '-'
     : formatDurationShort(activeOngoingExerciseCurrentRestSec);
+  const activeExerciseLastRestLabel = activeOngoingExerciseLastSet?.restSincePreviousSetSec === null
+    || activeOngoingExerciseLastSet?.restSincePreviousSetSec === undefined
+    ? '-'
+    : formatDurationShort(activeOngoingExerciseLastSet.restSincePreviousSetSec);
+  const activeExerciseLastSetClockLabel = activeOngoingExerciseLastSet?.loggedAt
+    ? toClockTimeLabelWithSeconds(activeOngoingExerciseLastSet.loggedAt)
+    : (`${activeOngoingExerciseLastSet?.timeLabel || ''}`.trim() || '-');
+  const activeExerciseSetCountLabel = `${activeOngoingExerciseSetCount} serie${activeOngoingExerciseSetCount > 1 ? 's' : ''} loggee${activeOngoingExerciseSetCount > 1 ? 's' : ''}`;
+  const activeExerciseLastSetCompactLabel = activeOngoingExerciseLastSet
+    ? `${Number(activeOngoingExerciseLastSet.reps || 0)} x ${Number(activeOngoingExerciseLastSet.loadDisplayed || activeOngoingExerciseLastSet.loadEstimated || 0).toFixed(1)} kg`
+    : 'Derniere -';
   const activeExerciseLastSetLabel = activeOngoingExerciseLastSet
     ? formatSetDraftLabel(activeOngoingExerciseLastSet)
     : 'Aucune serie loggee';
@@ -2073,7 +2170,7 @@ export default function TrainingPage() {
       defaultSpan: 12,
       render: () => (
         <>
-          <section className={styles.card}>
+          <section className={`${styles.card} ${styles.trainingCaptureShell}`}>
             {!ongoingWorkout ? (
               <>
                 <h2>Logger la seance</h2>
@@ -2141,7 +2238,10 @@ export default function TrainingPage() {
                   ) : null}
                 </article>
 
-                <article ref={exercisePickerRef} className={`${styles.card} ${styles.trainingCaptureCard} ${styles.trainingExerciseCard}`}>
+                <article
+                  ref={exercisePickerRef}
+                  className={`${styles.card} ${styles.trainingCaptureCard} ${styles.trainingExerciseCard} ${compactMobileCaptureUi && activeOngoingExercise ? styles.trainingExerciseCardActive : ''}`}
+                >
                   <div className={`${styles.sectionHead} ${styles.trainingExoHead}`}>
                     <div>
                       <h3>{activeOngoingExercise ? '2. Exercice en cours' : '2. Choisir le prochain exercice'}</h3>
@@ -2156,50 +2256,52 @@ export default function TrainingPage() {
                     {activeOngoingExercise ? <span className={`${styles.stateChip} ${styles.stateok}`}>actif</span> : null}
                   </div>
 
-                  <div className={styles.formGrid}>
-                    {renderExercisePicker({
-                      mode: activeOngoingExercise ? 'active' : 'draft',
-                      value: activeOngoingExercise ? activeOngoingExercise.exerciseName : (ongoingWorkout.currentExerciseDraft?.exerciseName || ''),
-                      onChange: (nextName) => (
-                        activeOngoingExercise
-                          ? updateActiveExercise({ exerciseName: nextName })
-                          : updateCurrentExerciseDraft({ exerciseName: nextName })
-                      ),
-                      onSelect: (name) => (
-                        activeOngoingExercise
-                          ? activateExercise(name)
-                          : updateCurrentExerciseDraft({ exerciseName: name })
-                      ),
-                      suggestions: activeOngoingExercise ? activeExerciseSuggestions : draftExerciseSuggestions,
-                    })}
-                    <select
-                      className={`${styles.select} ${styles.trainingExoFields}`}
-                      value={activeOngoingExercise ? activeOngoingExercise.equipment : (ongoingWorkout.currentExerciseDraft?.equipment || '')}
-                      onChange={(e) => (
-                        activeOngoingExercise
-                          ? updateActiveExercise({ equipment: e.target.value })
-                          : updateCurrentExerciseDraft({ equipment: e.target.value })
-                      )}
-                    >
-                      <option value="">Materiel exercice</option>
-                      {equipment.map((item) => <option key={item} value={item}>{item}</option>)}
-                    </select>
-                    <input
-                      className={`${styles.input} ${styles.trainingExoFields}`}
-                      placeholder="Notes exercice"
-                      value={activeOngoingExercise ? (activeOngoingExercise.notes || '') : (ongoingWorkout.currentExerciseDraft?.notes || '')}
-                      onChange={(e) => (
-                        activeOngoingExercise
-                          ? updateActiveExercise({ notes: e.target.value })
-                          : updateCurrentExerciseDraft({ notes: e.target.value })
-                      )}
-                    />
-                    {!activeOngoingExercise && !compactMobileCaptureUi ? (
-                      <button className={`${styles.button} ${styles.trainingPrimaryButton}`} type="button" onClick={() => activateExercise()}>
-                        Activer l exercice
-                      </button>
-                    ) : null}
-                  </div>
+                  {!compactMobileCaptureUi || !activeOngoingExercise ? (
+                    <div className={styles.formGrid}>
+                      {renderExercisePicker({
+                        mode: activeOngoingExercise ? 'active' : 'draft',
+                        value: activeOngoingExercise ? activeOngoingExercise.exerciseName : (ongoingWorkout.currentExerciseDraft?.exerciseName || ''),
+                        onChange: (nextName) => (
+                          activeOngoingExercise
+                            ? updateActiveExercise({ exerciseName: nextName })
+                            : updateCurrentExerciseDraft({ exerciseName: nextName })
+                        ),
+                        onSelect: (name) => (
+                          activeOngoingExercise
+                            ? activateExercise(name)
+                            : updateCurrentExerciseDraft({ exerciseName: name })
+                        ),
+                        suggestions: activeOngoingExercise ? activeExerciseSuggestions : draftExerciseSuggestions,
+                      })}
+                      <select
+                        className={`${styles.select} ${styles.trainingExoFields}`}
+                        value={activeOngoingExercise ? activeOngoingExercise.equipment : (ongoingWorkout.currentExerciseDraft?.equipment || '')}
+                        onChange={(e) => (
+                          activeOngoingExercise
+                            ? updateActiveExercise({ equipment: e.target.value })
+                            : updateCurrentExerciseDraft({ equipment: e.target.value })
+                        )}
+                      >
+                        <option value="">Materiel exercice</option>
+                        {equipment.map((item) => <option key={item} value={item}>{item}</option>)}
+                      </select>
+                      <input
+                        className={`${styles.input} ${styles.trainingExoFields}`}
+                        placeholder="Notes exercice"
+                        value={activeOngoingExercise ? (activeOngoingExercise.notes || '') : (ongoingWorkout.currentExerciseDraft?.notes || '')}
+                        onChange={(e) => (
+                          activeOngoingExercise
+                            ? updateActiveExercise({ notes: e.target.value })
+                            : updateCurrentExerciseDraft({ notes: e.target.value })
+                        )}
+                      />
+                      {!activeOngoingExercise && !compactMobileCaptureUi ? (
+                        <button className={`${styles.button} ${styles.trainingPrimaryButton}`} type="button" onClick={() => activateExercise()}>
+                          Activer l exercice
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {!compactMobileCaptureUi ? (
                     <div className={`${styles.trainingPillRow} ${styles.trainingExoPills}`}>
@@ -2245,7 +2347,37 @@ export default function TrainingPage() {
                             ) : null}
                           </div>
                         ) : null}
-                        <div className={styles.trainingSetSummary}>
+                        {setKeyboardMode ? (
+                          <div ref={setFormRef} className={`${styles.formGrid} ${styles.trainingSetFormAnchor}`}>
+                            <input
+                              ref={repsInputRef}
+                              className={styles.input}
+                              type="number"
+                              inputMode="numeric"
+                              enterKeyHint="next"
+                              placeholder="Reps"
+                              value={ongoingWorkout.currentSetDraft?.reps || ''}
+                              onFocus={handleSetComposerInputFocus}
+                              onBlur={handleSetComposerInputBlur}
+                              onKeyDown={handleRepsInputKeyDown}
+                              onChange={(e) => updateCurrentSetDraft({ reps: e.target.value })}
+                            />
+                            <input
+                              ref={loadInputRef}
+                              className={styles.input}
+                              type="number"
+                              inputMode="decimal"
+                              enterKeyHint="done"
+                              placeholder="Charge kg"
+                              value={ongoingWorkout.currentSetDraft?.load || ''}
+                              onFocus={handleSetComposerInputFocus}
+                              onBlur={handleSetComposerInputBlur}
+                              onKeyDown={handleLoadInputKeyDown}
+                              onChange={(e) => updateCurrentSetDraft({ load: e.target.value })}
+                            />
+                          </div>
+                        ) : null}
+                        <div className={`${styles.trainingSetSummary} ${setKeyboardMode ? styles.trainingSetSummaryCompact : ''}`}>
                           <div className={styles.trainingSetSummaryTop}>
                             <div>
                               <strong>{activeOngoingExercise.exerciseName}</strong>
@@ -2257,53 +2389,85 @@ export default function TrainingPage() {
                               <span className={styles.trainingSetSummaryBadge}>set #{activeOngoingExerciseNextSetIndex}</span>
                             )}
                           </div>
-                          <div className={styles.trainingSetSummaryMeta}>
-                            <span>Repos {activeExerciseRestLabel}</span>
-                            <span>Derniere: {activeExerciseLastSetLabel}</span>
-                          </div>
+                          {setKeyboardMode ? (
+                            <div className={styles.trainingSetCompactMeta}>
+                              <span>{activeExerciseSetCountLabel}</span>
+                              <span>prochaine #{activeOngoingExerciseNextSetIndex}</span>
+                              <span>repos actuel {activeExerciseRestLabel}</span>
+                              <span>dernier repos {activeExerciseLastRestLabel}</span>
+                              <span>derniere serie {activeExerciseLastSetCompactLabel}</span>
+                              <span>heure {activeExerciseLastSetClockLabel}</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className={styles.trainingSetStatGrid}>
+                                <div className={styles.trainingSetStat}>
+                                  <strong>{activeOngoingExerciseSetCount}</strong>
+                                  <span>{activeExerciseSetCountLabel}</span>
+                                </div>
+                                <div className={styles.trainingSetStat}>
+                                  <strong>#{activeOngoingExerciseNextSetIndex}</strong>
+                                  <span>prochaine serie</span>
+                                </div>
+                                <div className={styles.trainingSetStat}>
+                                  <strong>{activeExerciseRestLabel}</strong>
+                                  <span>repos actuel</span>
+                                </div>
+                                <div className={styles.trainingSetStat}>
+                                  <strong>{activeExerciseLastRestLabel}</strong>
+                                  <span>dernier repos</span>
+                                </div>
+                              </div>
+                              <div className={styles.trainingSetSummaryMeta}>
+                                <span>Derniere serie: {activeExerciseLastSetLabel}</span>
+                                <span>Heure dernier set: {activeExerciseLastSetClockLabel}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
-                        {activeOngoingExerciseLastSet && !ongoingWorkout.currentSetDraft?.editingSetIndex ? (
+                        {activeOngoingExerciseLastSet && !ongoingWorkout.currentSetDraft?.editingSetIndex && !setKeyboardMode ? (
                           <button className={`${styles.button} ${styles.trainingRecopierButton}`} type="button" onClick={duplicateLastSetIntoDraft}>
                             Recopier {activeOngoingExerciseLastSet.reps} x {Number(activeOngoingExerciseLastSet.loadDisplayed || 0).toFixed(0)} kg
                           </button>
                         ) : null}
-                        <div ref={setFormRef} className={`${styles.formGrid} ${styles.trainingSetFormAnchor}`}>
-                          <input
-                            ref={repsInputRef}
-                            className={styles.input}
-                            type="number"
-                            inputMode="numeric"
-                            enterKeyHint="next"
-                            placeholder="Reps"
-                            value={ongoingWorkout.currentSetDraft?.reps || ''}
-                            onFocus={handleSetComposerInputFocus}
-                            onBlur={handleSetComposerInputBlur}
-                            onKeyDown={handleRepsInputKeyDown}
-                            onChange={(e) => updateCurrentSetDraft({ reps: e.target.value })}
-                          />
-                          <input
-                            ref={loadInputRef}
-                            className={styles.input}
-                            type="number"
-                            inputMode="decimal"
-                            enterKeyHint="done"
-                            placeholder="Charge kg"
-                            value={ongoingWorkout.currentSetDraft?.load || ''}
-                            onFocus={handleSetComposerInputFocus}
-                            onBlur={handleSetComposerInputBlur}
-                            onKeyDown={handleLoadInputKeyDown}
-                            onChange={(e) => updateCurrentSetDraft({ load: e.target.value })}
-                          />
-                          <input
-                            className={`${styles.input} ${styles.trainingSetNoteInput}`}
-                            placeholder="Note set (optionnel)"
-                            value={ongoingWorkout.currentSetDraft?.setNote || ''}
-                            onFocus={handleSetComposerInputFocus}
-                            onBlur={handleSetComposerInputBlur}
-                            onChange={(e) => updateCurrentSetDraft({ setNote: e.target.value })}
-                          />
-                        </div>
-                        {activeCaptureActionRail}
+                        {!setKeyboardMode ? (
+                          <div ref={setFormRef} className={`${styles.formGrid} ${styles.trainingSetFormAnchor}`}>
+                            <input
+                              ref={repsInputRef}
+                              className={styles.input}
+                              type="number"
+                              inputMode="numeric"
+                              enterKeyHint="next"
+                              placeholder="Reps"
+                              value={ongoingWorkout.currentSetDraft?.reps || ''}
+                              onFocus={handleSetComposerInputFocus}
+                              onBlur={handleSetComposerInputBlur}
+                              onKeyDown={handleRepsInputKeyDown}
+                              onChange={(e) => updateCurrentSetDraft({ reps: e.target.value })}
+                            />
+                            <input
+                              ref={loadInputRef}
+                              className={styles.input}
+                              type="number"
+                              inputMode="decimal"
+                              enterKeyHint="done"
+                              placeholder="Charge kg"
+                              value={ongoingWorkout.currentSetDraft?.load || ''}
+                              onFocus={handleSetComposerInputFocus}
+                              onBlur={handleSetComposerInputBlur}
+                              onKeyDown={handleLoadInputKeyDown}
+                              onChange={(e) => updateCurrentSetDraft({ load: e.target.value })}
+                            />
+                            <input
+                              className={`${styles.input} ${styles.trainingSetNoteInput}`}
+                              placeholder="Note set (optionnel)"
+                              value={ongoingWorkout.currentSetDraft?.setNote || ''}
+                              onFocus={handleSetComposerInputFocus}
+                              onBlur={handleSetComposerInputBlur}
+                              onChange={(e) => updateCurrentSetDraft({ setNote: e.target.value })}
+                            />
+                          </div>
+                        ) : null}
                         {!compactMobileCaptureUi ? (
                           <div className={styles.trainingSetActionRow}>
                             <button className={`${styles.button} ${styles.trainingPrimaryButton}`} type="button" onClick={saveCurrentSet}>
@@ -2413,26 +2577,6 @@ export default function TrainingPage() {
                   <p className={styles.smallMuted}>Aucun exercice ongoing pour le moment. Active un exercice puis logge tes series.</p>
                 ) : null}
 
-                {compactMobileCaptureUi && !activeOngoingExercise ? (
-                  <div className={styles.captureActionRail}>
-                    <button
-                      className={`${styles.button} ${styles.captureActionPrimary}`}
-                      type="button"
-                      onClick={() => activateExercise()}
-                      disabled={!canActivateDraftExercise}
-                    >
-                      Activer l exercice
-                    </button>
-                    {canCloseOngoingWorkout ? (
-                      <button className={`${styles.buttonGhost} ${styles.captureActionSecondary}`} type="button" onClick={finalizeOngoingWorkout}>
-                        Cloturer la seance
-                      </button>
-                    ) : null}
-                    <button className={`${styles.buttonGhost} ${styles.captureActionTertiary} ${styles.buttonDanger}`} type="button" onClick={abandonOngoingWorkout}>
-                      Annuler workout
-                    </button>
-                  </div>
-                ) : null}
               </div>
             )}
           </section>
@@ -2991,19 +3135,42 @@ export default function TrainingPage() {
     () => blocks.find((block) => block.id === 'muscle-balance') || null,
     [blocks],
   );
-  const activeCaptureActionRail = compactMobileCaptureUi && activeOngoingExercise ? (
-    <div className={styles.trainingInlineActionGrid}>
-      <button className={`${styles.button} ${styles.captureActionPrimary}`} type="button" onClick={saveCurrentSet}>
-        {setActionPrimaryLabel}
-      </button>
-      <button className={`${styles.buttonGhost} ${styles.captureActionSecondary}`} type="button" onClick={closeActiveExercise}>
-        Cloturer l exercice
-      </button>
-      {ongoingWorkout.currentSetDraft?.editingSetIndex ? (
-        <button className={`${styles.buttonGhost} ${styles.captureActionTertiary}`} type="button" onClick={() => updateCurrentSetDraft(buildEmptyCurrentSetDraft())}>
-          Annuler edition
-        </button>
-      ) : null}
+  const mobileCaptureActionRail = compactMobileCaptureUi ? (
+    <div ref={actionRailRef} className={styles.captureActionRail}>
+      {activeOngoingExercise ? (
+        <>
+          <button className={`${styles.button} ${styles.captureActionPrimary}`} type="button" onClick={saveCurrentSet}>
+            {setActionPrimaryLabel}
+          </button>
+          <button className={`${styles.buttonGhost} ${styles.captureActionSecondary}`} type="button" onClick={closeActiveExercise}>
+            Cloturer l exercice
+          </button>
+          {ongoingWorkout.currentSetDraft?.editingSetIndex ? (
+            <button className={`${styles.buttonGhost} ${styles.captureActionTertiary}`} type="button" onClick={() => updateCurrentSetDraft(buildEmptyCurrentSetDraft())}>
+              Annuler edition
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <button
+            className={`${styles.button} ${styles.captureActionPrimary}`}
+            type="button"
+            onClick={() => activateExercise()}
+            disabled={!canActivateDraftExercise}
+          >
+            Activer l exercice
+          </button>
+          {canCloseOngoingWorkout ? (
+            <button className={`${styles.buttonGhost} ${styles.captureActionSecondary}`} type="button" onClick={finalizeOngoingWorkout}>
+              Cloturer la seance
+            </button>
+          ) : null}
+          <button className={`${styles.buttonGhost} ${styles.captureActionTertiary} ${styles.buttonDanger}`} type="button" onClick={abandonOngoingWorkout}>
+            Annuler workout
+          </button>
+        </>
+      )}
     </div>
   ) : null;
 
@@ -3116,6 +3283,7 @@ export default function TrainingPage() {
                   {block.render()}
                 </React.Fragment>
               ))}
+              {mobileCaptureActionRail}
               {captureSupportBlock && !workoutCaptureMode ? (
                 <details className={`${styles.card} ${styles.detailsCard}`}>
                   <summary className={styles.cardSummary}>Importer un workout et gerer la bibliotheque</summary>

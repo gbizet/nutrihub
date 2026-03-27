@@ -7,6 +7,7 @@ import {
 } from './dashboardStore.js';
 import { fetchJson } from './network.js';
 import { hasOngoingWorkoutDraft } from './ongoingWorkout.js';
+import { hasPendingCriticalLocalMutation } from './criticalLocalMutation.js';
 
 const dataScore = (state) => {
   if (!state || typeof state !== 'object') return 0;
@@ -60,6 +61,10 @@ export const bootstrapRemoteStateIntoLocalStorage = async ({
 
   if (hasOngoingDraft()) {
     return { status: 'skipped', reason: 'ongoing-workout-active' };
+  }
+
+  if (hasPendingCriticalLocalMutation()) {
+    return { status: 'skipped', reason: 'critical-local-mutation-pending' };
   }
 
   const localState = readLocal();
